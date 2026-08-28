@@ -20,9 +20,13 @@ BAT0 · 22%
 One row per battery that's actively charging, with its percentage. Two
 charging batteries get two rows.
 
-A battery held at its charge threshold doesn't show as charging — it shows
-in a separate block, so you know why it isn't charging instead of having to
-guess:
+A battery held at its charge threshold doesn't show as charging — the panel
+shows `Holding` and the configured limit, so you know why it isn't charging
+instead of having to guess:
+
+![Panel with batteries held at their charge threshold](../../screenshots/panel-detail-threshold.png)
+
+The same condition is also called out in the connection notification:
 
 ![Plugged notification with one battery charging and one at its charge threshold](../../screenshots/notify-threshold.png)
 
