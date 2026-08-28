@@ -121,24 +121,16 @@ test("make status combines service, tracker, and intelligence sections", () => {
       BATTERY_INTELLIGENCE_NOW: "20000000",
       BATTERY_INTELLIGENCE_SYSTEMCTL_COMMAND: path.join(bin, "systemctl"),
     };
-    const result = spawnSync(
-      "make",
-      ["--no-print-directory", "status"],
-      {
-        cwd: repository,
-        env: { ...statusEnv, NO_COLOR: "1" },
-        encoding: "utf8",
-      },
-    );
-    const colored = spawnSync(
-      "make",
-      ["--no-print-directory", "status"],
-      {
-        cwd: repository,
-        env: { ...statusEnv, BATTERY_STATUS_COLOR: "always" },
-        encoding: "utf8",
-      },
-    );
+    const result = spawnSync("make", ["--no-print-directory", "status"], {
+      cwd: repository,
+      env: { ...statusEnv, NO_COLOR: "1" },
+      encoding: "utf8",
+    });
+    const colored = spawnSync("make", ["--no-print-directory", "status"], {
+      cwd: repository,
+      env: { ...statusEnv, BATTERY_STATUS_COLOR: "always" },
+      encoding: "utf8",
+    });
     const removedTarget = spawnSync(
       "make",
       ["--no-print-directory", "intelligence-status"],
@@ -146,7 +138,10 @@ test("make status combines service, tracker, and intelligence sections", () => {
     );
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /SERVICE STATUS[\s\S]*stub service details/);
-    assert.match(result.stdout, /TRACKER STATE[\s\S]*previous_state = on-battery/);
+    assert.match(
+      result.stdout,
+      /TRACKER STATE[\s\S]*previous_state = on-battery/,
+    );
     assert.match(
       result.stdout,
       /BATTERY INTELLIGENCE[\s\S]*Usual readiness: learning \(0\/12 windows, 0\/3 sessions\)/,
