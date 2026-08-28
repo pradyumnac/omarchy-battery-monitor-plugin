@@ -12,16 +12,20 @@ picture at a glance, then inspect each physical battery when you need detail.
 
 ## Highlights
 
-- Combined charge, capacity, power rate, and time estimate
-- Per-battery health, energy, cycles, percentage, and state
+- Combined charge, capacity, power rate, and time estimate in the bar
+- Per-battery health, energy, cycles, percentage, and state in the panel
+- A `Plugged` notification when the charger connects, and an `Unplugged`
+  notification with the session summary when it disconnects
 - Charging and on-battery session timing
 - Built-in power-profile controls
 - User-level installation with no root service
-- Hidden automatically on desktops without laptop batteries
+- Hidden automatically on desktops with no laptop battery, and refused at
+  install time on the same hardware
 
-Want the details? Read the
-[charging session experience](docs/charging-session-experience.md) for power
-transitions, timing, multi-battery behavior, and the notification UX plan.
+Want the full picture? Read
+[charging session experience](docs/charging-session-experience.md) for the
+state machine behind every notification, the multi-battery rules, and the
+state file the tracker writes.
 
 ## Install
 
@@ -38,11 +42,19 @@ omarchy-shell shell rescanPlugins
 omarchy restart shell
 ```
 
-Installation is repeatable and stays in your user account.
+Installation is repeatable and stays in your user account. `make install` runs
+a preflight check first and refuses to install on a machine with no laptop
+battery, or missing `upower` / `systemctl --user`. Run the check on its own,
+any time, with:
+
+```sh
+make doctor
+```
 
 ## Requirements
 
 - Omarchy with Quickshell
+- A laptop battery (`make doctor` verifies this)
 - UPower and `systemctl --user`
 - A Nerd Font available to the Omarchy shell
 

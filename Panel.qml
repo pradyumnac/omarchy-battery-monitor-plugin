@@ -10,8 +10,7 @@ Panel {
   id: root
   moduleName: "omarchy.power"
   ipcTarget: "omarchy.power"
-  // manageIpc: false so this panel can own the single IpcHandler the target
-  // permits — needed for the togglePercentage method below.
+  // manageIpc: false so this panel can own the target's single IpcHandler.
   manageIpc: false
   property var batteryInfo: ({})
   property var systemInfo: ({})
@@ -28,9 +27,6 @@ Panel {
     if (!(start > 0)) return "—"
     return Model.formatSessionDuration(root.nowEpochSeconds - start)
   }
-  readonly property string lastChargeEndStr: root.chargeHistory.state === "on-charge"
-    ? "—"
-    : Model.formatHoursSince(root.chargeHistory.chargeEndEpoch, root.nowEpochSeconds)
   readonly property var laptopBatteries: Model.getLaptopBatteries(UPower.devices)
   // UPower can expose a display device on desktops too (for example AC power
   // or a UPS). Treat actual laptop batteries as the only reliable signal for
@@ -62,11 +58,9 @@ Panel {
   property string activeProfile: ""
   property int profileIndex: 0
   property bool cursorActive: false
-  readonly property bool showPercentage: setting("showPercentage", false) === true
-  // With the percentage shown the button paints a text block wider than an
-  // icon, so the open-panel mark takes the painted width instead of the
-  // icon-sized fraction of the slot the fallback assumes.
-  readonly property real openPanelIndicatorWidth: showPercentage && !button.vertical ? button.glyphPaintedWidth : 0
+  // The bar always shows the combined percentage. Use the painted text width
+  // for the open-panel mark on a horizontal bar.
+  readonly property real openPanelIndicatorWidth: !button.vertical ? button.glyphPaintedWidth : 0
   readonly property bool batteryPresent: root.hasLaptopBattery
 
   function upowerStates() {
@@ -223,11 +217,6 @@ Panel {
     actionProc.running = true
   }
 
-  function togglePercentage() {
-    root.settings = Object.assign({}, root.settings, { showPercentage: !root.showPercentage })
-    if (root.bar && root.bar.shell) root.bar.shell.updateEntryInline(root.moduleName, root.settings)
-  }
-
   IpcHandler {
     target: "omarchy.power"
 
@@ -236,7 +225,6 @@ Panel {
     function show() { root.open() }
     function hide() { root.close() }
     function toggle() { root.toggle() }
-    function togglePercentage() { root.togglePercentage() }
   }
 
   onOpenedChanged: {
@@ -372,15 +360,13 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.showPercentage && !vertical
-      ? Math.round(root.batteryFraction * 100) + "% " + root.batteryIcon()
-      : root.batteryIcon()
-    slotSize: Style.bar.iconSlot * (root.showPercentage && !vertical ? 2 : 1)
+    text: vertical
+      ? root.batteryIcon()
+      : Math.round(root.batteryFraction * 100) + "% " + root.batteryIcon()
+    slotSize: Style.bar.iconSlot * (vertical ? 1 : 2)
     tooltipText: ""
-    onPressed: function(b) {
-      if (!root.batteryPresent) return
-      if (b === Qt.RightButton) root.togglePercentage()
-      else root.toggle()
+    onPressed: function() {
+      if (root.batteryPresent) root.toggle()
     }
   }
 
@@ -553,33 +539,27 @@ Panel {
         // ---------- Session history ----------
         PanelSeparator {
           foreground: root.bar.foreground
-          visible: root.uptimeSeconds > 0 || root.chargeHistory.chargeEndEpoch > 0
+          visible: root.uptimeSeconds > 0 || root.sinceChargeStr !== "—"
         }
 
         Row {
-          visible: root.uptimeSeconds > 0 || root.chargeHistory.chargeEndEpoch > 0
+          visible: root.uptimeSeconds > 0 || root.sinceChargeStr !== "—"
           width: parent.width
           spacing: Style.space(20)
 
           Column {
             width: (parent.width - parent.spacing) / 2
-            spacing: Style.spacing.labelGap
             InfoPair {
               label: "◷ Uptime"
               value: root.systemUptimeStr
-            }
-            InfoPair {
-              label: root.discharging ? "󰂄 Battery" : (root.charging ? "󰂆 Charge" : "Session")
-              value: root.sinceChargeStr
             }
           }
 
           Column {
             width: (parent.width - parent.spacing) / 2
-            spacing: Style.spacing.labelGap
             InfoPair {
-              label: "󰂅 Last"
-              value: root.lastChargeEndStr
+              label: root.discharging ? "󰂄 Unplugged" : (root.charging ? "󰂆 Plugged" : "Session")
+              value: root.sinceChargeStr
             }
           }
         }

@@ -112,8 +112,8 @@ function deviceStateString(device, states) {
 function deviceStateIcon(device, states) {
   if (!device || !device.isPresent) return "󰂎";
   var s = states || {};
-  if (device.state === s.Charging || device.state === s.PendingCharge)
-    return "󰂆";
+  if (device.state === s.Charging) return "󰂆";
+  if (device.state === s.PendingCharge) return "󰂄";
   if (device.state === s.Discharging) return "󰂀";
   if (device.state === s.FullyCharged) return "󰂅";
   if (device.state === s.Empty) return "󰂎";
@@ -293,15 +293,6 @@ function formatSessionDuration(seconds) {
   return formatElapsed(totalMinutes * 60);
 }
 
-function formatHoursSince(epoch, nowEpoch) {
-  var elapsed = Number(nowEpoch) - Number(epoch);
-  if (!(Number(epoch) > 0) || !Number.isFinite(elapsed) || elapsed < 0)
-    return "—";
-  if (elapsed < 60 * 60) return Math.max(0, Math.ceil(elapsed / 60)) + "m ago";
-  if (elapsed < 24 * 60 * 60) return Math.ceil(elapsed / (60 * 60)) + "h ago";
-  return Math.ceil(elapsed / (24 * 60 * 60)) + "d ago";
-}
-
 if (typeof module === "object" && module !== null) {
   module.exports = {
     clampIndex: clampIndex,
@@ -328,6 +319,5 @@ if (typeof module === "object" && module !== null) {
     formatSessionDuration: formatSessionDuration,
     parseChargeHistory: parseChargeHistory,
     parseUptime: parseUptime,
-    formatHoursSince: formatHoursSince,
   };
 }

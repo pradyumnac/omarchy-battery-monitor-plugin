@@ -2,208 +2,228 @@
 
 # Charging session experience
 
-> **Purpose:** This document is the shared user-experience contract and
-> developer handoff for power transitions. The notification behavior below is
-> expected behavior; it is not implemented yet.
+> **Purpose:** This document describes how the plugin tracks and reports
+> charging sessions. It is the single reference for the behavior — for end
+> users who want to know what a notification means, and for developers who
+> change the tracker or the panel.
 
-Live battery data comes from UPower. Session history comes from a 30-second
-poller, so recorded transition times can be up to 30 seconds late.
+The panel and the notifications use two different data sources:
 
-## User experience at a glance
+- **UPower events** drive every notification. A notification appears only
+  when the charger connects or disconnects.
+- **A 30-second poll** keeps the panel's session numbers fresh between
+  events. The poll never sends a notification. It only updates the state
+  file that the panel reads.
 
-| Event | Notification | Widget after the transition |
+Because of the poll, a duration shown in the panel can lag the real state by
+up to 30 seconds. Notifications do not have this lag.
+
+## What you see
+
+| Event | Notification | Panel after the event |
 | --- | --- | --- |
-| Charger connects | Show the current charging state and identify which batteries are charging or held. | Show charging state, combined level, charge rate, time to full, and current charge duration. |
-| Charger disconnects | Show a concise session wrap-up: approximate duration, combined level gained, and the gain for each battery. | Show on-battery state, combined level, draw, remaining time, battery duration, and time since charging ended. |
-| Session data is incomplete | Show only facts that are known. Do not estimate missing history. | Show `—` for unknown session values. |
+| Charger connects | `Plugged`, with the battery that is charging and its percentage. | Bar shows the combined percentage. Panel shows charging details. |
+| Charger disconnects | `Unplugged`, with the session duration and one start-to-end row per battery. | Panel shows on-battery details and one `Unplugged` duration. |
+| A fact is not known | The notification shows only known facts. | The panel shows `—` for the unknown value. |
 
-## Notification information hierarchy
+## Notifications
 
-Notifications must answer the most useful question first. They must not repeat
-every widget statistic.
+A notification answers one question first: **what changed?** It does not
+repeat every number the panel already shows.
 
 ### Charger connected
 
 ```text
-Charging
-BAT0 charging at 22% · BAT1 held at 80%
-Combined 50% · 26 W · 42m to full
+Plugged
+BAT0 · 22%
 ```
 
-1. **Title:** `Charging`.
-2. **Primary line:** Which battery is charging and which battery is held,
-   full, unavailable, or not charging.
-3. **Secondary line:** Combined level, current aggregate charge rate, and time
-   to full when each value is available.
+- **Title:** `Plugged`.
+- **Body:** one row per battery that is actively charging, with its
+  percentage.
 
-Do not show a session delta on connection. The session has only just started.
+If two batteries charge at once, each gets its own row. A battery held at
+its charge threshold does not appear as charging. If no battery is charging
+yet — for example, a battery already above its charge threshold — the body
+reads `No battery is charging`.
+
+The notification does not show aggregate pack level, charge rate, or time
+to full. The panel already shows those; the notification only reports the
+event.
 
 ### Charger disconnected
 
 ```text
-Charging ended
-~18m · Combined 46% → 50% (+4 points)
-BAT0 +10 points · BAT1 no change
+Unplugged
+Charged for ~18m
+BAT0: 12% → 22%
+BAT1: 80% → 80%
 ```
 
-1. **Title:** `Charging ended`.
-2. **Primary line:** Approximate duration and combined start-to-end level.
-3. **Secondary line:** Percentage-point change for each physical battery.
+- **Title:** `Unplugged`.
+- **First row:** approximate session duration.
+- **Battery rows:** one start-to-end percentage per battery.
 
-Use **percentage points**, not relative percentage. For example, 20% to 30%
-is `+10 points`, not `+50%`.
+The start and end values speak for themselves. The notification does not
+add a calculated gain next to them. Duration carries a `~` because the
+timestamps behind it are approximate.
 
-After the next tracker observation, the widget shows `Battery <elapsed>` and
-`Last <elapsed> ago`. When charging starts again, `Last` clears to `—`.
+## Rules for every notification
 
-## Keep notifications concise
+- One short title and one scannable fact per row.
+- On plug, list only batteries that are actively charging.
+- On unplug, show duration first, then one row per battery.
+- List only present laptop batteries — never a UPS or AC adapter entry.
+- Name batteries `BAT0`, `BAT1`, and so on. Never show a serial number or
+  another host-specific ID.
+- Omit a value that is not known. Do not show a misleading zero.
+- Never repeat a notification while the observed power state stays the
+  same.
 
-- Use no more than a title and two content lines where the notification system
-  supports that layout.
-- Put combined information before per-battery detail on disconnect.
-- Include only present laptop batteries.
-- Use `BAT0` and `BAT1`; do not expose serial numbers or host-specific IDs.
-- Omit unavailable rate, duration, delta, or estimate values instead of showing
-  misleading zeroes.
-- Use `no change` for a reliable zero-point change.
-- Use `~` for duration because polling makes transition times approximate.
-- Do not notify again while the observed power state remains unchanged.
+## Batteries added or removed mid-session
 
-## One or more batteries
-
-| Battery condition | Connection notification | Disconnection summary |
+| Case | Connection notification | Disconnection summary |
 | --- | --- | --- |
-| One battery | Identify that battery and its current state. | Show its start, end, and point gain. |
-| Two batteries charging | Identify both as charging. | Show combined gain, then each battery's gain. |
-| One charging, one held by threshold | Identify the charging battery first and the held battery second. | Show both; use `no change` for the held battery when reliable. |
-| Battery present only at session start | Show it at connection. | Say `removed` with its start level; do not invent an end level or delta. |
-| Battery present only at session end | It was not part of the connection snapshot. | Say `added` with its end level; do not invent a start level or delta. |
-| No laptop battery | Do not create a session notification. | Keep the battery widget hidden. |
+| One battery | Its name and current percentage. | Its start and end percentages. |
+| Two batteries charging | Each battery on its own row. | Each battery's start and end percentages on its own row. |
+| One charging, one held at threshold | Only the charging battery. | Both rows; equal start and end values already show no change. |
+| Battery present at session start only | Shown at connection. | Row reads `removed`, with its start level. No invented end value. |
+| Battery present at session end only | Not part of the connection snapshot. | Row reads `added`, with its end level. No invented start value. |
+| No laptop battery | No notification is sent. | The panel stays hidden. |
 
-Session history belongs to the laptop's mains connection. It is not a separate
-charging session for BAT0 and BAT1. Per-battery snapshots explain how the
-combined session affected each battery.
+A charging session belongs to the laptop's mains connection, not to one
+battery. The per-battery rows show how that one session affected each
+physical battery.
 
-## Transition flow
+## How a session is tracked
 
 ```mermaid
 flowchart TD
-    poll[Poll power state<br/>every 30 seconds] --> battery{Present laptop<br/>battery?}
-    battery -- No --> stop[No session write<br/>No notification]
-    battery -- Yes --> mains{Online type=Mains<br/>supply?}
-    mains -- Yes --> charge[Observed on-charge]
-    mains -- No --> discharge[Observed on-battery]
-    charge --> changed{Changed from saved<br/>power state?}
-    discharge --> changed
-    changed -- No --> refresh[Refresh last observation<br/>No notification]
-    changed -- Battery to charge --> start[Save session start<br/>and battery snapshots]
-    start --> plug[Notify current<br/>charging state]
-    changed -- Charge to battery --> finish[Save session end<br/>and battery snapshots]
-    finish --> complete{Start snapshot and<br/>continuity reliable?}
-    complete -- Yes --> summary[Notify session<br/>wrap-up]
-    complete -- No --> fallback[Notify on-battery<br/>current state only]
+    event[UPower power event] --> changed{Mains state changed?}
+    changed -- No --> quiet[No notification]
+    changed -- Battery to charge --> once[Run tracker once<br/>capture start snapshot]
+    once --> confirmed{A battery already<br/>reports Charging?}
+    confirmed -- Yes --> plug[Send Plugged<br/>immediately]
+    confirmed -- No --> wait[Wait up to 15s for a<br/>battery-state event]
+    wait -- Battery starts charging --> plug
+    wait -- Timeout elapses --> plugFallback[Send Plugged with the<br/>battery's real status<br/>may read No battery is charging]
+    changed -- Charge to battery --> finish[Capture end snapshot]
+    finish --> reliable{Start snapshot and<br/>continuity reliable?}
+    reliable -- Yes --> unplug[Send Unplugged<br/>immediately]
+    reliable -- No --> current[Send current on-battery<br/>state only]
+
+    poll[30-second poll] --> refresh[Refresh session state file]
+    refresh --> never[No notification]
 ```
 
-## Scenario and display map
+The 15-second wait exists for one reason: a battery already above its
+charge threshold never reports `Charging`. Without the wait, the plug
+notification would fire before UPower updates the battery's status, and
+could wrongly say no battery is charging even when one is about to start.
+The wait gives UPower a chance to report the real status first, and the
+timeout guarantees a notification still arrives if that battery never
+starts charging.
 
-| Event or condition | What is saved | What is displayed | Delay |
+## Scenario map
+
+| Event or condition | What is saved | What is shown | Delay |
 | --- | --- | --- | --- |
-| First observation while charging | Current state; session start is unknown | Live charging state; session duration is `—` | Live data first; state within 30s |
-| First observation on battery | Current state; session start is unknown | Live on-battery state; session duration is `—` | Live data first; state within 30s |
-| Battery-to-charge transition | Charge start, combined level, and per-battery start snapshots | Connection notification; `Charge` begins | Up to 30s |
-| Charge continues | Existing start is preserved; latest observation advances | Charge duration and live statistics continue | Widget refresh |
-| Charge-to-battery transition | Charge end, duration, combined end level, and per-battery end snapshots | Wrap-up notification; `Battery` and `Last` begin | Up to 30s |
-| Battery use continues | Existing charge end is preserved | Battery duration and `Last` continue | Widget refresh |
-| Charger reconnects | New start snapshots; previous charge end clears | New connection notification; `Last` becomes `—` | Up to 30s |
-| Same state after a gap over 90s | Current session start becomes unknown | Current duration is `—`; no historical claim | Next poll |
-| Different state after an unknown gap | Current state is known, exact transition and duration are not | Current-state notification only; no wrap-up delta | Next poll |
-| Empty refresh payload | Existing valid data remains | Last valid guarded widget values remain | Until a valid refresh |
+| First observation, charging | Current state; session start unknown | Live charging state; duration `—` | Live data first; state settles within 30s |
+| First observation, on battery | Current state; session start unknown | Live on-battery state; duration `—` | Live data first; state settles within 30s |
+| Battery-to-charge transition | Charge start and per-battery start snapshot | `Plugged` notification; panel's `Plugged` duration starts | UPower event |
+| Charging continues | Existing start kept; latest observation advances | `Plugged` duration and live numbers continue | Panel refresh |
+| Charge-to-battery transition | Charge end, duration, per-battery end snapshot | `Unplugged` notification; panel's `Unplugged` duration starts | UPower event |
+| On battery continues | Existing charge end kept | `Unplugged` duration continues | Panel refresh |
+| Charger reconnects | New start snapshot; previous end clears | New `Plugged` notification and duration | UPower event |
+| Same state after a gap over 90s | Current session start becomes unknown | Duration `—`; no historical claim | Next poll |
+| Different state after an unknown gap | Current state known; exact transition and duration are not | Current-state notification only; no wrap-up delta | Next poll |
+| Empty poll payload | Existing valid data stays | Last valid values stay on screen | Until the next valid poll |
 
-## Data required for the expected notifications
+## State file reference
 
-The current state file is stored at:
+Everything above reads and writes one file:
 
 ```text
 ${XDG_STATE_HOME:-$HOME/.local/state}/battery-session/state
 ```
 
-### Existing session fields
+`battery-session-tracker` writes it. `battery-session-monitor` triggers it
+on power events. The panel reads it every refresh.
 
-| Field | Meaning | Widget use |
+| Field | Meaning | Used for |
 | --- | --- | --- |
-| `previous_state` | Last observed `on-charge` or `on-battery` state | Interprets the current session and hides `Last` while charging |
-| `state_since` | Start of the current observed state, or `0` | Primary source for `Charge` or `Battery` duration |
-| `last_charge_start` | Last observed battery-to-charge transition | Fallback source for charge duration |
-| `last_charge_end` | Last observed charge-to-battery transition, or `0` | Source for `Last` while on battery |
-| `last_observed` | Last successful tracker observation | Detects clock reversal or a gap over 90 seconds |
+| `previous_state` | Last observed state: `on-charge` or `on-battery` | Chooses the `Plugged` or `Unplugged` panel label |
+| `state_since` | Start of the current observed state, or `0` | Panel's session duration |
+| `last_charge_start` | Last observed battery-to-charge transition | Fallback source for `Plugged` duration |
+| `last_charge_end` | Last observed charge-to-battery transition, or `0` | Marks the session end; not shown separately |
+| `last_observed` | Time of the last successful poll | Detects a clock reversal or a gap over 90 seconds |
+| `charge_start_levels` | Per-battery percentage at charge start | Produces one start-to-end row per battery on unplug |
+| `charge_session_valid` | Whether continuity and the start snapshot are reliable | Blocks an invented duration or delta |
 
-### Additional session snapshot required
+The file holds only `BAT*` names, percentages, presence, and timestamps —
+never a serial number, model ID, or other host-identifying data. Every
+write is atomic (write to a temp file, then rename) and user-only
+(`umask 077`), the same as the rest of the tracker's state.
 
-The unplug wrap-up requires one start snapshot that survives until the session
-ends:
+### The two scripts that write it
 
-| Value | Capture time | Requirement |
+| Script | Runs | Job |
 | --- | --- | --- |
-| Session start epoch | Observed battery-to-charge transition | Use the poll time and mark the displayed duration approximate. |
-| Combined start level | Session start | Store the aggregate percentage used by the widget. |
-| Per-battery start level | Session start | Store `BAT*` name, percentage, and presence only. |
-| Combined end level | Observed charge-to-battery transition | Capture before creating the wrap-up. |
-| Per-battery end level | Session end | Match by `BAT*` name and handle added or removed batteries explicitly. |
+| `battery-session-tracker` | Every 30s (`battery-session-tracker.timer`), and once on every power event | Reads sysfs, updates the state file, and — only when called with `--power-event` — sends the notification |
+| `battery-session-monitor` | Continuously, as a `battery-session-monitor.service` | Watches `upower --monitor`, decides when a transition is real, and calls the tracker with `--power-event` |
 
-Do not store serial numbers, model-specific identifiers, credentials, or other
-host data. Write snapshots atomically with user-only permissions, as with the
-current state file.
+`battery-session-tracker` never notifies on its own poll. Only
+`battery-session-monitor` passes `--power-event`, so a notification always
+traces back to a real UPower event, never to the fallback poll.
 
-## Acceptance examples
+## Test coverage
 
-| Input | Expected concise output |
+| Behavior | Covered by |
 | --- | --- |
-| BAT0 charges from 12% to 22%; BAT1 stays at 80%; 18-minute session | `~18m · Combined 46% → 50% (+4 points)` then `BAT0 +10 points · BAT1 no change` |
-| Both batteries charge | Combined summary, then one point gain for BAT0 and one for BAT1 |
-| Start snapshot missing | `On battery · 50%` with no duration or delta claim |
-| End estimate unavailable | Keep the wrap-up; omit time-remaining data |
-| Charger reconnects | Show current charging batteries; clear `Last`; begin a new snapshot |
-| Repeated on-charge poll | No notification |
+| Alternate mains supply name, `type=Mains` | `tests/tracker.test.js` |
+| Battery-to-charge transition | `tests/tracker.test.js` |
+| Charge-to-battery transition | `tests/tracker.test.js` |
+| Reconnect clears `last_charge_end` | `tests/tracker.test.js` |
+| Same-state gap over 90 seconds | `tests/tracker.test.js` |
+| Desktop with no battery creates no session | `tests/tracker.test.js` |
+| Two-battery aggregation | `tests/model.test.js` |
+| Charge-threshold detection | `tests/model.test.js` |
+| UPower event triggers a notification | `tests/monitor.test.js` |
+| A held-threshold battery still gets a `Plugged` notification after the wait times out | `tests/monitor.test.js` |
+| Poll alone never sends a notification | `tests/tracker.test.js`, `tests/monitor.test.js` |
+| `Plugged` notification content | `tests/tracker.test.js` |
+| `Unplugged` notification content | `tests/tracker.test.js` |
+| Duplicate notifications on repeated events | `tests/monitor.test.js` |
+| Notification delivery failure does not block state persistence | `tests/tracker.test.js` |
+| Unknown session start falls back to current facts only | `tests/tracker.test.js` |
+| Every file write stays under the user's home directory | `tests/write-boundary.test.js` |
+| Install refuses on a machine with no battery | `tests/preflight.test.js` |
 
-## Developer handoff: current test map
+**Not yet covered:** a battery added or removed partway through a session
+(the state-machine rule exists in `battery-session-tracker`; see
+`send_unplug_notification`). Real-hardware verification across laptop
+models also remains open — see
+[issue #4](https://github.com/pradyumnac/omarchy-battery-monitor-plugin/issues/4)
+for the current verification matrix and how to add a report.
 
-| Behavior | Current automated coverage |
-| --- | --- |
-| Alternate mains name with `type=Mains` | Yes |
-| Battery-to-charge transition | Yes |
-| Charge-to-battery transition | Yes |
-| Reconnect clears `last_charge_end` | Yes |
-| Same-state gap over 90 seconds | Yes |
-| Desktop without a battery | Yes |
-| Two-battery aggregation | Yes, model-level |
-| Threshold calculation | Yes, model-level |
-| Exact notification content | No; notification feature is not implemented |
-| Start and end battery snapshots | No; snapshot persistence is not implemented |
-| Added or removed battery during a session | No |
-| Real T480 AC and USB-C supplies | Manual/community verification |
+## Manual check on a laptop
 
-## Review checklist
-
-Use this single checklist for design review, implementation handoff, and manual
-acceptance on a laptop:
+Run through this list before a release, and any time you touch the tracker
+or the panel:
 
 - [ ] Connect the charger with BAT0 and BAT1 present.
-- [ ] Confirm the notification names batteries that charge or remain held.
-- [ ] Confirm combined level, rate, and time to full agree with the widget.
+- [ ] Confirm `Plugged` shows only the charging battery and its percentage.
+- [ ] Confirm the bar shows the combined percentage without opening the panel.
 - [ ] Leave the charger connected long enough for a measurable change.
-- [ ] Disconnect it and wait for the next 30-second tracker observation.
-- [ ] Confirm the wrap-up shows approximate duration and combined gain.
-- [ ] Confirm each battery gain uses percentage points.
-- [ ] Reconnect and confirm `Last` clears and a new session begins.
-- [ ] Repeat with one battery absent and with a charge threshold active.
-- [ ] Confirm repeated polls do not create duplicate notifications.
-- [ ] Confirm unknown history produces current-state facts, not invented deltas.
+- [ ] Disconnect the charger and confirm the response is immediate.
+- [ ] Confirm `Unplugged` shows the approximate duration.
+- [ ] Confirm each battery has one start-to-end row and no added gain.
+- [ ] Confirm the panel shows one `Plugged` or `Unplugged` field, not two.
+- [ ] Repeat with one battery absent, and with a charge threshold active.
+- [ ] Confirm repeated polls create no duplicate notification.
+- [ ] Confirm an unknown session shows current facts, not an invented delta.
 
-For visual review, capture the connected widget, plug notification, unplug
-summary, threshold state, and unknown-session fallback. Crop captures to the
-relevant UI and remove hostnames, serial numbers, notifications with personal
-content, and other host-specific data.
-
-The Mermaid diagrams in this document render directly on GitHub. Keep future
-flow, copy, acceptance, and screenshot guidance here so this remains the one
-reference for charging-session behavior.
+For a screenshot, capture the connected panel, the plug notification, the
+unplug summary, the threshold state, and the unknown-session fallback. Crop
+out anything outside the UI, and remove hostnames, serial numbers, and any
+personal notification content before sharing it.

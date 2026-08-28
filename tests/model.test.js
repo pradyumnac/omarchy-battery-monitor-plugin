@@ -83,9 +83,7 @@ test("handles threshold and time boundaries", () => {
   assert.equal(Model.aggregateTimeLabel(100, 100, 10, false), "");
 });
 
-test("rejects invalid or future timestamps", () => {
-  assert.equal(Model.formatHoursSince(0, 1000), "—");
-  assert.equal(Model.formatHoursSince(900, 1000), "2m ago");
+test("parseChargeHistory drops entries after the given now", () => {
   assert.equal(
     Model.parseChargeHistory("2000\tcharging\n1000\tdischarging", 1500).entries
       .length,
