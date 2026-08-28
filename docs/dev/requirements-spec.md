@@ -46,8 +46,8 @@ This doc is the single source of pending work. GitHub issues are archived
 - [ ] Confirm repeated polls create no duplicate notification.
 - [ ] Confirm an unknown session shows current facts, not an invented delta.
 
-For a screenshot, follow the
-[screenshot checklist](screenshot-checklist.md).
+For a screenshot, follow the capture steps in the screenshot backlog in
+`HANDOFF.md` (untracked; ask the maintainer if you don't have it).
 
 **Not yet covered:** real-hardware verification across laptop models
 beyond the T480. See [Backlog](#backlog).

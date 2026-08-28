@@ -22,31 +22,6 @@ picture at a glance, then inspect each physical battery when you need detail.
 - Hidden automatically on desktops with no laptop battery, and refused at
   install time on the same hardware
 
-### Per-battery detail
-
-![Panel detail: BAT0 and BAT1 side by side](screenshots/panel-detail.png)
-
-> Screenshot pending — see
-> [screenshot checklist](docs/dev/screenshot-checklist.md).
-
-### Session notifications
-
-<table>
-<tr><td>
-
-![Plugged notification](screenshots/notify-plugged.png)
-
-> Pending
-
-</td><td>
-
-![Unplugged notification](screenshots/notify-unplugged.png)
-
-> Pending
-
-</td></tr>
-</table>
-
 ## Install
 
 ```sh
@@ -68,10 +43,30 @@ Full install, uninstall, and troubleshooting steps:
 | [docs/dev/state-file-reference.md](docs/dev/state-file-reference.md) | State file field reference |
 | [docs/dev/requirements-spec.md](docs/dev/requirements-spec.md) | Test coverage, manual QA checklist, backlog |
 
+## Repo map
+
+| Path | What's there |
+| --- | --- |
+| `Panel.qml`, `Model.js`, `manifest.json` | The Omarchy bar widget |
+| `service/` | The tracker, the monitor, and their systemd units — installed and run long-term |
+| `scripts/` | `install`/`uninstall`/`preflight` — one-shot, run by `make` |
+| `tests/` | Node test suite (`make test`) |
+| `docs/user/` | End-user docs: install, uninstall, notifications |
+| `docs/dev/` | Contributor docs: architecture, state file, requirements spec |
+
+## Constraints
+
+- Keep runtime state, host paths, credentials, serials, and personal data out
+  of Git.
+- Write files only below the current user's home directory, including tests
+  and configurable install/state paths.
+- Keep the plugin desktop-safe. Do not require root or edit
+  `/usr/share/omarchy`.
+
 ## Contributing
 
-See [AGENTS.md](AGENTS.md) for the repo map and operating constraints,
-[CONTRIBUTING.md](CONTRIBUTING.md) for the contribution process, and
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution process
+(includes `make check` / `make install` / `make uninstall`) and
 [CONTRIBUTORS.md](CONTRIBUTORS.md) for project credits.
 
 ## License

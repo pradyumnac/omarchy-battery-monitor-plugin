@@ -2,9 +2,6 @@
 
 ![Panel detail: BAT0 and BAT1 side by side](../../screenshots/panel-detail.png)
 
-> Screenshot pending — see
-> [screenshot checklist](../dev/screenshot-checklist.md).
-
 The bar shows one combined percentage. Open the panel for per-battery
 health, energy, cycles, and state. A notification fires only when the
 charger connects or disconnects — the panel's own numbers refresh every 30
@@ -13,10 +10,7 @@ seconds on their own, so a shown duration can lag the real state by up to
 
 ## Charger connected: `Plugged`
 
-![Plugged notification](../../screenshots/notify-plugged.png)
-
-> Screenshot pending — see
-> [screenshot checklist](../dev/screenshot-checklist.md).
+![Panel while charging, with the power-profile picker](../../screenshots/panel-detail-charging.png)
 
 ```text
 Plugged
@@ -30,10 +24,7 @@ A battery held at its charge threshold doesn't show as charging — it shows
 in a separate block, so you know why it isn't charging instead of having to
 guess:
 
-![Plugged notification with charge-threshold block](../../screenshots/notify-threshold.png)
-
-> Screenshot pending — see
-> [screenshot checklist](../dev/screenshot-checklist.md).
+![Plugged notification with one battery charging and one at its charge threshold](../../screenshots/notify-threshold.png)
 
 ```text
 Plugged
@@ -47,9 +38,6 @@ aggregate pack level, charge rate, or time-to-full.
 ## Charger disconnected: `Unplugged`
 
 ![Unplugged notification](../../screenshots/notify-unplugged.png)
-
-> Screenshot pending — see
-> [screenshot checklist](../dev/screenshot-checklist.md).
 
 ```text
 Unplugged

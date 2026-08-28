@@ -8,8 +8,8 @@ Thanks for helping improve T480 Omarchy Battery Monitor.
    open backlog and explain the user problem. Issues aren't used for
    tracking — that file is the source of pending work.
 2. Keep changes focused and portable across laptops.
-3. Follow the constraints in [AGENTS.md](AGENTS.md) — user-level paths only,
-   no root, no host-identifying data in Git.
+3. Follow the constraints in [README.md](README.md#constraints) —
+   user-level paths only, no root, no host-identifying data in Git.
 
 ## Local checks
 
@@ -19,7 +19,7 @@ make check
 
 For UI changes, test on a laptop with one and two batteries when possible. Also check that the widget stays hidden on a desktop without laptop batteries.
 
-If your change affects the panel layout or a notification's title/body, update the matching screenshot — see [docs/dev/screenshot-checklist.md](docs/dev/screenshot-checklist.md).
+If your change affects the panel layout or a notification's title/body, update the matching screenshot — see the screenshot backlog in `HANDOFF.md` (untracked; ask the maintainer if you don't have it).
 
 ## Pull requests
 
