@@ -18,6 +18,8 @@ make check
 ```
 
 For UI changes, test on a laptop with one and two batteries when possible. Also check that the widget stays hidden on a desktop without laptop batteries.
+Use `make status` for the combined service, tracker-state, and intelligence
+report when diagnosing live behavior.
 
 If your change affects the panel layout or a notification's title/body, update the matching screenshot — see the screenshot backlog in `HANDOFF.md` (untracked; ask the maintainer if you don't have it).
 

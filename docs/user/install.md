@@ -19,14 +19,20 @@ make install
 and restarts the Omarchy shell so a fresh QML engine loads the installed code.
 No manual reload is needed.
 
-Track the learning workflow and see what has been recorded with:
+Inspect the complete runtime report with:
 
 ```sh
-make intelligence-status
+make status
 ```
 
-It reports service health, active-window progress, model readiness, and the
-local history used for the `≈ Usual` runtime estimate. Runtime data is kept in
+It prints separated, color-coded sections for service health, raw tracker
+state, active-window progress, and the local history used for the `≈ Usual`
+runtime estimate. `Usual readiness` shows both requirements as progress —
+`X/12 windows` and `Y/3 sessions` — so learning is visible before the estimate
+is ready. ANSI colors are automatic on a terminal; use
+`NO_COLOR=1 make status` for plain output or
+`BATTERY_STATUS_COLOR=always make status` to preserve colors through a pipe.
+Runtime data is kept in
 `~/.local/state/battery-session/` and never sent over the network.
 
 If no shell session is running yet, start one:
@@ -92,6 +98,6 @@ rapid uninstall/reinstall.
 | `make install` stops with "no present battery" | `make doctor` found no laptop battery | Expected on desktops — the plugin only supports laptops |
 | Widget doesn't appear after install | Shell wasn't running during install | Run `omarchy restart shell` |
 | `make doctor` reports missing `upower` | UPower isn't installed | Install `upower` through your package manager |
-| Notifications don't appear | `battery-session-monitor.service` isn't active | Run `systemctl --user status battery-session-monitor.service` |
+| Notifications don't appear | `battery-session-monitor.service` isn't active | Run `make status` and inspect **SERVICE STATUS** |
 
 See [notifications](notifications.md) for what each notification means.

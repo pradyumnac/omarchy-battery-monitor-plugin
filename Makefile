@@ -1,5 +1,5 @@
 # shellcheck disable=all
-.PHONY: check test install uninstall uninstall-purge-data reload restart-shell status intelligence-status preflight doctor
+.PHONY: check test install uninstall uninstall-purge-data reload restart-shell status preflight doctor
 
 PLUGIN_DIR ?= $(HOME)/.config/omarchy/plugins/doe.power
 export PLUGIN_DIR
@@ -68,12 +68,47 @@ restart-shell:
 		echo "omarchy not found; restart the shell manually to apply lifecycle changes."; \
 	fi
 
+# Show service health, raw tracker state, and intelligence progress in one
+# TTY-aware, color-coded report. NO_COLOR disables ANSI styling.
 status:
-	systemctl --user status battery-session-tracker.timer --no-pager
-	@cat "$${XDG_STATE_HOME:-$$HOME/.local/state}/battery-session/state" 2>/dev/null || true
-
-# Show service health, recorded observations, and model learning progress.
-intelligence-status:
+	@color=0; color_mode="$${BATTERY_STATUS_COLOR:-auto}"; \
+	if [ -z "$${NO_COLOR:-}" ]; then \
+		case "$$color_mode" in \
+			always) color=1 ;; \
+			never) color=0 ;; \
+			auto) [ -t 1 ] && color=1 ;; \
+			*) printf 'Invalid BATTERY_STATUS_COLOR: %s (expected auto, always, or never)\n' "$$color_mode" >&2; exit 2 ;; \
+		esac; \
+	fi; \
+	if [ "$$color" -eq 1 ]; then \
+		bold=$$(printf '\033[1m'); cyan=$$(printf '\033[36m'); \
+		blue=$$(printf '\033[34m'); yellow=$$(printf '\033[33m'); \
+		reset=$$(printf '\033[0m'); \
+		export SYSTEMD_COLORS=1 BATTERY_STATUS_COLOR=always; \
+	else \
+		bold=; cyan=; blue=; yellow=; reset=; \
+		export SYSTEMD_COLORS=0 BATTERY_STATUS_COLOR=never; \
+	fi; \
+	section() { \
+		printf '\n%b%s%b\n%b%s%b\n' "$$bold$$cyan" "$$1" "$$reset" \
+			"$$blue" '────────────────────────────────────────' "$$reset"; \
+	}; \
+	section 'SERVICE STATUS'; \
+	systemctl --user status battery-session-tracker.timer \
+		battery-session-monitor.service --no-pager || true; \
+	section 'TRACKER STATE'; \
+	state_file="$${XDG_STATE_HOME:-$$HOME/.local/state}/battery-session/state"; \
+	if [ -f "$$state_file" ]; then \
+		awk -F= -v cyan="$$cyan" -v reset="$$reset" '{ \
+			separator = index($$0, "="); \
+			if (separator > 0) \
+				printf "  %s%s%s = %s\n", cyan, substr($$0, 1, separator - 1), reset, substr($$0, separator + 1); \
+			else print "  " $$0; \
+		}' "$$state_file"; \
+	else \
+		printf '  %bWaiting for first tracker poll%b\n' "$$yellow" "$$reset"; \
+	fi; \
+	section 'BATTERY INTELLIGENCE'; \
 	scripts/battery-intelligence-status.sh
 
 # Check this machine is ready to install, without installing anything.

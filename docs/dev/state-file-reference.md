@@ -74,11 +74,21 @@ to recent usage while retaining a limited longer back-reference.
   [architecture](architecture.md#open-edge-cases) for suspend and shutdown
   cases that can also hide a power-state change.
 
-## Reading it directly
+## Inspecting it
+
+Use the combined, formatted report for normal diagnostics:
+
+```sh
+make status
+```
+
+Its **TRACKER STATE** section shows this file verbatim as color-coded key/value
+rows, followed by the interpreted **BATTERY INTELLIGENCE** section. To read
+only the file directly:
 
 ```sh
 cat "${XDG_STATE_HOME:-$HOME/.local/state}/battery-session/state"
 ```
 
-Useful when a panel value looks wrong and you need to confirm whether the
-tracker or the panel is at fault.
+This is useful when a panel value looks wrong and you need to confirm whether
+the tracker or the panel is at fault.

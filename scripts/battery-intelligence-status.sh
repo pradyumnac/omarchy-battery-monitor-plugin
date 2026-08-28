@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Report battery-intelligence workflow state without changing runtime data.
-# Safe to run repeatedly (`make intelligence-status`).
+# Render the battery-intelligence portion of `make status` without changing
+# runtime data. ANSI styling is automatic on a TTY, forced with
+# BATTERY_STATUS_COLOR=always, disabled with =never, and always disabled when
+# NO_COLOR is set.
 
 set -uo pipefail
 
@@ -9,6 +11,43 @@ state_file="$state_dir/state"
 history_file="$state_dir/discharge-history.tsv"
 systemctl_command="${BATTERY_INTELLIGENCE_SYSTEMCTL_COMMAND:-systemctl}"
 now=${BATTERY_INTELLIGENCE_NOW:-$(date +%s)}
+
+color_enabled=0
+if [[ -z ${NO_COLOR-} ]]; then
+  case ${BATTERY_STATUS_COLOR:-auto} in
+  always) color_enabled=1 ;;
+  never) color_enabled=0 ;;
+  auto) [[ -t 1 ]] && color_enabled=1 ;;
+  *)
+    printf 'Invalid BATTERY_STATUS_COLOR: %s (expected auto, always, or never)\n' \
+      "$BATTERY_STATUS_COLOR" >&2
+    exit 2
+    ;;
+  esac
+fi
+
+bold=""
+cyan=""
+green=""
+yellow=""
+red=""
+dim=""
+reset=""
+if ((color_enabled == 1)); then
+  bold=$'\033[1m'
+  cyan=$'\033[36m'
+  green=$'\033[32m'
+  yellow=$'\033[33m'
+  red=$'\033[31m'
+  dim=$'\033[2m'
+  reset=$'\033[0m'
+fi
+
+field() {
+  local label=$1 text=$2 color=${3-}
+  printf '  %b%s:%b %b%s%b\n' "$bold$cyan" "$label" "$reset" \
+    "$color" "$text" "$reset"
+}
 
 value() {
   local key=$1 file=$2
@@ -48,18 +87,68 @@ service_state() {
   fi
 }
 
-printf 'Battery intelligence\n'
-printf '  Data: %s\n' "$state_dir"
-printf '  Monitor: %s\n' "$(service_state battery-session-monitor.service)"
-printf '  Poller: %s\n' "$(service_state battery-session-tracker.timer)"
+monitor_state=$(service_state battery-session-monitor.service)
+poller_state=$(service_state battery-session-tracker.timer)
+field "Data" "$state_dir" "$dim"
+if [[ $monitor_state == active ]]; then
+  field "Monitor" "$monitor_state" "$green"
+else
+  field "Monitor" "$monitor_state" "$red"
+fi
+if [[ $poller_state == active ]]; then
+  field "Poller" "$poller_state" "$green"
+else
+  field "Poller" "$poller_state" "$red"
+fi
+
+total=0
+recent=0
+sessions=0
+last_row=""
+if [[ -f "$history_file" ]]; then
+  history_stats=$(awk -F '\t' -v now="$now" '
+    BEGIN { total = recent = sessions = 0; cutoff = now - 30 * 24 * 60 * 60 }
+    $1 ~ /^[0-9]+$/ && $2 != "" && $3 ~ /^[1-9][0-9]*$/ && $4 ~ /^[1-9][0-9]*$/ {
+      total++
+      if ($1 >= cutoff) {
+        recent++
+        if (!recent_seen[$2]++) sessions++
+      }
+      last = $0
+    }
+    END { printf "%d\t%d\t%d\t%s", total, recent, sessions, last }
+  ' "$history_file")
+  IFS=$'\t' read -r total recent sessions last_row <<<"$history_stats"
+fi
+window_progress=$recent
+session_progress=$sessions
+((window_progress > 12)) && window_progress=12
+((session_progress > 3)) && session_progress=3
+readiness_progress="$window_progress/12 windows, $session_progress/3 sessions"
+
+render_history() {
+  if [[ -f "$history_file" ]]; then
+    field "History" "$total valid rows ($recent recent / $sessions recent sessions)"
+    if [[ -n ${last_row:-} ]]; then
+      IFS=$'\t' read -r last_epoch _last_session last_draw last_capacity <<<"$last_row"
+      field "Last recorded window" \
+        "$(format_duration $((15 * 60))) at $last_epoch ($(format_power "$last_draw") draw, $(format_energy "$last_capacity") capacity)"
+    else
+      field "Last recorded window" "none" "$dim"
+    fi
+  else
+    field "History" "no observations recorded" "$yellow"
+  fi
+}
 
 if [[ ! -f "$state_file" ]]; then
-  printf '  Workflow: waiting for first tracker poll\n'
+  field "Usual readiness" "waiting for first tracker poll ($readiness_progress)" "$yellow"
+  field "Usual full runtime" "not ready" "$yellow"
+  render_history
   exit 0
 fi
 
 usual=$(value usual_full_runtime_seconds "$state_file")
-samples=$(value usual_sample_count "$state_file")
 session=$(value discharge_session_id "$state_file")
 window_start=$(value window_start_epoch "$state_file")
 window_energy=$(value window_start_energy_uwh "$state_file")
@@ -67,61 +156,39 @@ last_energy=$(value last_sample_energy_uwh "$state_file")
 fingerprint=$(value battery_fingerprint "$state_file")
 
 if [[ "$usual" =~ ^[1-9][0-9]*$ ]]; then
-  printf '  Workflow: model ready\n'
-  printf '  Usual full runtime: %s\n' "$(format_duration "$usual")"
+  field "Usual readiness" "ready ($readiness_progress)" "$green"
+  field "Usual full runtime" "$(format_duration "$usual")" "$green"
+elif ((recent >= 12 && sessions >= 3)); then
+  field "Usual readiness" "waiting for usable capacity ($readiness_progress)" "$yellow"
+  field "Usual full runtime" "not ready" "$yellow"
 else
-  printf '  Workflow: learning\n'
-  printf '  Usual full runtime: not ready\n'
+  field "Usual readiness" "learning ($readiness_progress)" "$yellow"
+  field "Usual full runtime" "not ready" "$yellow"
 fi
-printf '  Model samples: %s\n' "${samples:-0}"
 
 if [[ "$window_start" =~ ^[1-9][0-9]*$ && "$now" =~ ^[0-9]+$ ]]; then
   elapsed=$((now - window_start))
   if ((elapsed >= 0)); then
     progress=$((elapsed * 100 / (15 * 60)))
     ((progress > 100)) && progress=100
-    printf '  Active window: %s%% (%s / 15m)\n' "$progress" "$(format_duration "$elapsed")"
+    field "Active window" "$progress% ($(format_duration "$elapsed") / 15m)" "$cyan"
   else
-    printf '  Active window: reset (clock moved backwards)\n'
+    field "Active window" "reset (clock moved backwards)" "$yellow"
   fi
 else
-  printf '  Active window: waiting for valid energy samples\n'
+  field "Active window" "waiting for valid energy samples" "$yellow"
 fi
 
-printf '  Discharge session: %s\n' "${session:-none}"
+field "Discharge session" "${session:-none}"
 if [[ "$window_energy" =~ ^[1-9][0-9]*$ ]]; then
-  printf '  Window start energy: %s\n' "$(format_energy "$window_energy")"
+  field "Window start energy" "$(format_energy "$window_energy")"
 else
-  printf '  Window start energy: none\n'
+  field "Window start energy" "none" "$dim"
 fi
 if [[ "$last_energy" =~ ^[1-9][0-9]*$ ]]; then
-  printf '  Last sample energy: %s\n' "$(format_energy "$last_energy")"
+  field "Last sample energy" "$(format_energy "$last_energy")"
 else
-  printf '  Last sample energy: none\n'
+  field "Last sample energy" "none" "$dim"
 fi
-printf '  Battery set: %s\n' "${fingerprint//\\,/, }"
-
-if [[ -f "$history_file" ]]; then
-  history_stats=$(awk -F '\t' -v now="$now" '
-    BEGIN { total = recent = sessions = 0; cutoff = now - 30 * 24 * 60 * 60 }
-    $1 ~ /^[0-9]+$/ && $2 != "" && $3 ~ /^[1-9][0-9]*$/ && $4 ~ /^[1-9][0-9]*$/ {
-      total++
-      if ($1 >= cutoff) recent++
-      if (!seen[$2]++) sessions++
-      last = $0
-    }
-    END { printf "%d\t%d\t%d\t%s", total, recent, sessions, last }
-  ' "$history_file")
-  IFS=$'\t' read -r total recent sessions last_row <<<"$history_stats"
-  printf '  History: %s valid rows (%s recent / %s sessions)\n' "$total" "$recent" "$sessions"
-  if [[ -n "${last_row:-}" ]]; then
-    IFS=$'\t' read -r last_epoch _last_session last_draw last_capacity <<<"$last_row"
-    printf '  Last recorded window: %s at %s (%s draw, %s capacity)\n' \
-      "$(format_duration $((15 * 60)))" "$last_epoch" \
-      "$(format_power "$last_draw")" "$(format_energy "$last_capacity")"
-  else
-    printf '  Last recorded window: none\n'
-  fi
-else
-  printf '  History: no observations recorded\n'
-fi
+field "Battery set" "${fingerprint//\\,/, }"
+render_history

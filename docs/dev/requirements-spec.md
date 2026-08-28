@@ -46,6 +46,9 @@ This doc is the single source of pending work. GitHub issues are archived
 | Invalid/discontinuous windows are rejected | `tests/tracker.test.js` |
 | Battery topology changes invalidate only the active window | `tests/tracker.test.js` |
 | Unknown history schemas are ignored safely | `tests/tracker.test.js` |
+| `make status` combines service, raw state, and intelligence sections; no separate intelligence target remains | `tests/intelligence-status.test.js` |
+| Status colors can be forced or disabled for noninteractive output | `tests/intelligence-status.test.js` |
+| `Usual readiness` reports capped 12-window and 3-session progress | `tests/intelligence-status.test.js` |
 
 ## Manual check before a release
 
@@ -64,6 +67,9 @@ This doc is the single source of pending work. GitHub issues are archived
 - [ ] Confirm an unknown session shows current facts, not an invented delta.
 - [ ] After enough real use, confirm a full battery shows `≈ Usual` as active runtime.
 - [ ] Confirm suspend/gaps do not inflate `Usual`.
+- [ ] Run `make status` and confirm all three separated sections are readable,
+      semantic states are color-coded, `Usual readiness` shows both `X/12`
+      windows and `Y/3` sessions, and `NO_COLOR=1` removes ANSI styling.
 - [ ] Run `make uninstall`, reinstall, and confirm history is retained.
 - [ ] Run `make uninstall-purge-data` only on disposable test data and confirm
       the battery-session state directory is removed.
