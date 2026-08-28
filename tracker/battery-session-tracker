@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Persist real AC/battery transitions for the Omarchy power widget.
+# This is intentionally a user-level poller: no udev or root access required.
+
+set -euo pipefail
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/battery-session"
+state_file="$state_dir/state"
+mkdir -p "$state_dir"
+
+ac_online=0
+for online_file in /sys/class/power_supply/AC*/online /sys/class/power_supply/ACAD*/online; do
+  if [[ -f "$online_file" ]] && [[ "$(<"$online_file")" == "1" ]]; then
+    ac_online=1
+    break
+  fi
+done
+
+# Do not create a fake battery session on desktops.
+has_battery=0
+for present_file in /sys/class/power_supply/BAT*/present; do
+  if [[ -f "$present_file" ]] && [[ "$(<"$present_file")" == "1" ]]; then
+    has_battery=1
+    break
+  fi
+done
+(( has_battery == 1 )) || exit 0
+
+current_state="on-battery"
+(( ac_online == 1 )) && current_state="on-charge"
+now=$(date +%s)
+
+previous_state=""
+state_since=0
+last_charge_end=0
+last_charge_start=0
+if [[ -f "$state_file" ]]; then
+  # The file is created and owned by this user-level service.
+  # shellcheck disable=SC1090
+  source "$state_file"
+fi
+
+if [[ -n "$previous_state" && "$previous_state" != "$current_state" ]]; then
+  state_since="$now"
+  if [[ "$previous_state" == "on-charge" && "$current_state" == "on-battery" ]]; then
+    last_charge_end="$now"
+  elif [[ "$previous_state" == "on-battery" && "$current_state" == "on-charge" ]]; then
+    last_charge_start="$now"
+  fi
+elif [[ -z "$previous_state" ]]; then
+  # Unknown initial session: wait for a real transition before showing a time.
+  state_since=0
+fi
+
+if [[ "$current_state" == "on-charge" && "$previous_state" == "on-charge" && "$last_charge_start" == 0 ]]; then
+  last_charge_start=0
+fi
+
+umask 077
+tmp_file="$state_file.tmp.$$"
+{
+  printf 'previous_state=%q\n' "$current_state"
+  printf 'state_since=%q\n' "$state_since"
+  printf 'last_charge_end=%q\n' "$last_charge_end"
+  printf 'last_charge_start=%q\n' "$last_charge_start"
+} > "$tmp_file"
+mv -f "$tmp_file" "$state_file"

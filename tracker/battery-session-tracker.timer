@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll battery charge state for the Omarchy power widget
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

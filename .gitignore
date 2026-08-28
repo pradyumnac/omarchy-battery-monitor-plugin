@@ -1,0 +1,6 @@
+# Runtime state and local tooling
+.local/
+state/
+*.log
+*.swp
+.DS_Store

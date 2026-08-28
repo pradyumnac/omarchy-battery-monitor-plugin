@@ -1,0 +1,7 @@
+[Unit]
+Description=Track battery charge sessions for the Omarchy power widget
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.config/omarchy/plugins/doe.power/tracker/battery-session-tracker --once

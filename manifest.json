@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "doe.power",
+  "name": "Omarchy Battery Monitor Plugin",
+  "version": "1.0.0",
+  "author": "pradyumnac",
+  "description": "A compact battery and power-session monitor for Omarchy laptops",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Omarchy Battery Monitor",
+    "description": "Battery, power profile, and power-session monitor",
+    "category": "System",
+    "allowMultiple": false
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.power"
+  }
+}
