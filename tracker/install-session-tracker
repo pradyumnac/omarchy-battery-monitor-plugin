@@ -6,8 +6,26 @@ set -euo pipefail
 
 tracker_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source_dir="$(dirname "$tracker_source")"
-plugin_dir="${PLUGIN_DIR:-$HOME/.config/omarchy/plugins/doe.power}"
-unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+
+"$tracker_source/battery-session-preflight"
+
+account_home=$(getent passwd "$(id -u)" | cut -d: -f6)
+[[ -n $account_home ]] || {
+  printf 'Unable to determine the current user home directory.\n' >&2
+  exit 1
+}
+home_dir=$(realpath -m -- "$account_home")
+plugin_dir=$(realpath -m -- "${PLUGIN_DIR:-$home_dir/.config/omarchy/plugins/doe.power}")
+unit_dir=$(realpath -m -- "${XDG_CONFIG_HOME:-$home_dir/.config}/systemd/user")
+for write_dir in "$plugin_dir" "$unit_dir"; do
+  case "$write_dir/" in
+  "$home_dir"/*) ;;
+  *)
+    printf 'Refusing install path outside HOME: %s\n' "$write_dir" >&2
+    exit 1
+    ;;
+  esac
+done
 mkdir -p "$plugin_dir" "$plugin_dir/tracker" "$unit_dir"
 
 # Copy a standalone checkout into the standard Omarchy plugin location. If
@@ -18,31 +36,50 @@ if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
   cp -a -- "$source_dir/tracker/battery-session-tracker" \
     "$source_dir/tracker/battery-session-tracker.service" \
     "$source_dir/tracker/battery-session-tracker.timer" \
+    "$source_dir/tracker/battery-session-monitor" \
+    "$source_dir/tracker/battery-session-monitor.service" \
+    "$source_dir/tracker/power-supply.sh" \
+    "$source_dir/tracker/battery-session-preflight" \
     "$source_dir/tracker/install-session-tracker" "$plugin_dir/tracker/"
-  chmod +x "$plugin_dir/tracker/battery-session-tracker" "$plugin_dir/tracker/install-session-tracker"
+  chmod +x "$plugin_dir/tracker/battery-session-tracker" \
+    "$plugin_dir/tracker/battery-session-monitor" \
+    "$plugin_dir/tracker/battery-session-preflight" \
+    "$plugin_dir/tracker/install-session-tracker"
 fi
 
 ln -sfn "$plugin_dir/tracker/battery-session-tracker" "$unit_dir/battery-session-tracker"
 
-# A unit cannot expand PLUGIN_DIR, so write the resolved executable path into
-# the user service. Unit quoting keeps spaces and special characters intact.
-tracker_exec="$plugin_dir/tracker/battery-session-tracker"
-tracker_exec="${tracker_exec//\\/\\\\}"
-tracker_exec="${tracker_exec//\"/\\\"}"
-tracker_exec="${tracker_exec//%/%%}"
-tracker_exec="\"$tracker_exec\""
-service_template="$tracker_source/battery-session-tracker.service"
-while IFS= read -r line; do
-  if [[ "$line" == ExecStart=* ]]; then
-    printf 'ExecStart=%s --once\n' "$tracker_exec"
-  else
-    printf '%s\n' "$line"
-  fi
-done < "$service_template" > "$unit_dir/battery-session-tracker.service"
+# A unit cannot expand PLUGIN_DIR, so write each resolved executable path into
+# its user service. Unit quoting keeps spaces and special characters intact.
+escape_unit_exec() {
+  local executable=$1
+  executable="${executable//\\/\\\\}"
+  executable="${executable//\"/\\\"}"
+  executable="${executable//%/%%}"
+  printf '"%s"' "$executable"
+}
+
+write_service_unit() {
+  local template=$1 output=$2 executable=$3 arguments=$4 line
+  while IFS= read -r line; do
+    if [[ "$line" == ExecStart=* ]]; then
+      printf 'ExecStart=%s%s\n' "$executable" "$arguments"
+    else
+      printf '%s\n' "$line"
+    fi
+  done < "$template" > "$output"
+}
+
+tracker_exec=$(escape_unit_exec "$plugin_dir/tracker/battery-session-tracker")
+monitor_exec=$(escape_unit_exec "$plugin_dir/tracker/battery-session-monitor")
+write_service_unit "$tracker_source/battery-session-tracker.service" \
+  "$unit_dir/battery-session-tracker.service" "$tracker_exec" " --once"
+write_service_unit "$tracker_source/battery-session-monitor.service" \
+  "$unit_dir/battery-session-monitor.service" "$monitor_exec" ""
 ln -sfn "$plugin_dir/tracker/battery-session-tracker.timer" "$unit_dir/battery-session-tracker.timer"
 
 systemctl --user daemon-reload
-systemctl --user enable --now battery-session-tracker.timer
+systemctl --user enable --now battery-session-tracker.timer battery-session-monitor.service
 systemctl --user start battery-session-tracker.service
 
 printf 'Battery session tracker installed and running.\nState: %s\n' \

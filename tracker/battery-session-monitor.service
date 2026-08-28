@@ -1,0 +1,12 @@
+[Unit]
+Description=Watch power events for Omarchy battery session notifications
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.config/omarchy/plugins/doe.power/tracker/battery-session-monitor
+Restart=always
+RestartSec=2s
+
+[Install]
+WantedBy=default.target

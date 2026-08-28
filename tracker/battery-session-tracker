@@ -4,29 +4,178 @@
 
 set -euo pipefail
 
-state_dir="${BATTERY_SESSION_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/battery-session}"
+power_event=0
+case ${1-} in
+"") ;;
+--once) ;;
+--power-event) power_event=1 ;;
+*)
+  printf 'Usage: %s [--once|--power-event]\n' "${0##*/}" >&2
+  exit 2
+  ;;
+esac
+
+account_home=$(getent passwd "$(id -u)" | cut -d: -f6)
+[[ -n $account_home ]] || {
+  printf 'Unable to determine the current user home directory.\n' >&2
+  exit 1
+}
+home_dir=$(realpath -m -- "$account_home")
+state_dir=$(realpath -m -- "${BATTERY_SESSION_STATE_DIR:-${XDG_STATE_HOME:-$home_dir/.local/state}/battery-session}")
+case "$state_dir/" in
+"$home_dir"/*) ;;
+*)
+  printf 'Refusing state path outside HOME: %s\n' "$state_dir" >&2
+  exit 1
+  ;;
+esac
 state_file="$state_dir/state"
 power_supply_root="${POWER_SUPPLY_ROOT:-/sys/class/power_supply}"
+notification_command="${BATTERY_SESSION_NOTIFY_COMMAND:-omarchy-notification-send}"
 mkdir -p "$state_dir"
 
+# shellcheck source=power-supply.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/power-supply.sh"
 ac_online=0
-for supply_dir in "$power_supply_root"/*; do
-  if [[ -f "$supply_dir/type" && "$(<"$supply_dir/type")" == "Mains" \
-    && -f "$supply_dir/online" && "$(<"$supply_dir/online")" == "1" ]]; then
-    ac_online=1
-    break
-  fi
-done
+ac_mains_online && ac_online=1
 
 # Do not create a fake battery session on desktops.
-has_battery=0
-for present_file in "$power_supply_root"/BAT*/present; do
-  if [[ -f "$present_file" ]] && [[ "$(<"$present_file")" == "1" ]]; then
-    has_battery=1
-    break
+battery_dirs=()
+for battery_dir in "$power_supply_root"/BAT*; do
+  if [[ -d "$battery_dir" && -f "$battery_dir/present" \
+    && "$(<"$battery_dir/present")" == "1" ]]; then
+    battery_dirs+=("$battery_dir")
   fi
 done
-(( has_battery == 1 )) || exit 0
+((${#battery_dirs[@]} > 0)) || exit 0
+
+is_nonnegative_integer() {
+  [[ $1 =~ ^[0-9]+$ ]]
+}
+
+join_with_newline() {
+  local result="" part
+  for part in "$@"; do
+    [[ -n $part ]] || continue
+    [[ -z $result ]] || result+=$'\n'
+    result+="$part"
+  done
+  printf '%s' "$result"
+}
+
+capture_battery_levels() {
+  local battery_dir name capacity result=""
+  for battery_dir in "${battery_dirs[@]}"; do
+    name=${battery_dir##*/}
+    capacity=""
+    [[ -f "$battery_dir/capacity" ]] && capacity=$(<"$battery_dir/capacity")
+    is_nonnegative_integer "$capacity" || continue
+    [[ -z $result ]] || result+=","
+    result+="$name:$capacity"
+  done
+  printf '%s' "$result"
+}
+
+format_session_minutes() {
+  local seconds=$1 minutes hours
+  minutes=$(((seconds + 59) / 60))
+  ((minutes > 0)) || minutes=1
+  hours=$((minutes / 60))
+  minutes=$((minutes % 60))
+  if ((hours > 0 && minutes > 0)); then
+    printf '%dh %dm' "$hours" "$minutes"
+  elif ((hours > 0)); then
+    printf '%dh' "$hours"
+  else
+    printf '%dm' "$minutes"
+  fi
+}
+
+send_charge_notification() {
+  local battery_dir name status capacity detail description
+  local -a charging_parts=()
+
+  for battery_dir in "${battery_dirs[@]}"; do
+    name=${battery_dir##*/}
+    status=""
+    capacity=""
+    [[ -f "$battery_dir/status" ]] && status=$(<"$battery_dir/status")
+    [[ -f "$battery_dir/capacity" ]] && capacity=$(<"$battery_dir/capacity")
+    detail="$name"
+    is_nonnegative_integer "$capacity" && detail+=" · ${capacity}%"
+
+    [[ $status == "Charging" ]] && charging_parts+=("$detail")
+  done
+
+  description=$(join_with_newline "${charging_parts[@]}")
+  [[ -n $description ]] || description="No battery is charging"
+
+  if [[ -n $notification_command ]] && command -v -- "$notification_command" >/dev/null 2>&1; then
+    "$notification_command" --app-name doe.power -u low -g "󰂆" -t 6000 \
+      "Plugged" "$description" || true
+  fi
+}
+
+send_unplug_notification() {
+  local entry name start end duration description
+  local -a entries=() rows=() start_names=() end_names=()
+  local -A starts=() ends=() seen=()
+
+  IFS=',' read -r -a entries <<< "$charge_start_levels"
+  for entry in "${entries[@]}"; do
+    [[ $entry == BAT*:* ]] || continue
+    name=${entry%%:*}
+    start=${entry#*:}
+    if is_nonnegative_integer "$start"; then
+      starts["$name"]=$start
+      start_names+=("$name")
+    fi
+  done
+
+  IFS=',' read -r -a entries <<< "$(capture_battery_levels)"
+  for entry in "${entries[@]}"; do
+    [[ $entry == BAT*:* ]] || continue
+    name=${entry%%:*}
+    end=${entry#*:}
+    if is_nonnegative_integer "$end"; then
+      ends["$name"]=$end
+      end_names+=("$name")
+    fi
+  done
+
+  if [[ $charge_session_valid == 1 ]] && is_nonnegative_integer "$last_charge_start" \
+    && is_nonnegative_integer "$last_charge_end" && ((last_charge_end >= last_charge_start)); then
+    duration=$(format_session_minutes "$((last_charge_end - last_charge_start))")
+    rows+=("Charged for ~$duration")
+
+    for name in "${start_names[@]}"; do
+      start=${starts[$name]}
+      if [[ -n ${ends[$name]-} ]]; then
+        end=${ends[$name]}
+        rows+=("$name: ${start}% → ${end}%")
+      else
+        rows+=("$name: ${start}% → removed")
+      fi
+      seen["$name"]=1
+    done
+
+    for name in "${end_names[@]}"; do
+      [[ -n ${seen[$name]-} ]] && continue
+      rows+=("$name: added at ${ends[$name]}%")
+    done
+  else
+    for name in "${end_names[@]}"; do
+      rows+=("$name: ${ends[$name]}%")
+    done
+  fi
+
+  description=$(join_with_newline "${rows[@]}")
+  [[ -n $description ]] || description="Battery level unavailable"
+  if [[ -n $notification_command ]] && command -v -- "$notification_command" >/dev/null 2>&1; then
+    "$notification_command" --app-name doe.power -u low -g "󰂄" -t 8000 \
+      "Unplugged" "$description" || true
+  fi
+}
 
 current_state="on-battery"
 (( ac_online == 1 )) && current_state="on-charge"
@@ -35,13 +184,19 @@ state_since=0
 last_charge_end=0
 last_charge_start=0
 last_observed=0
+charge_start_levels=""
+charge_session_valid=0
 if [[ -f "$state_file" ]]; then
   # The file is created and owned by this user-level service.
   # shellcheck disable=SC1090
   source "$state_file"
 fi
 
-now=$(date +%s)
+now=${BATTERY_SESSION_NOW:-$(date +%s)}
+is_nonnegative_integer "$now" || {
+  printf 'Invalid BATTERY_SESSION_NOW: %s\n' "$now" >&2
+  exit 1
+}
 continuity=1
 if [[ "$last_observed" =~ ^[0-9]+$ ]] && (( last_observed > 0 )) && (( now < last_observed || now - last_observed > 90 )); then
   continuity=0
@@ -51,13 +206,25 @@ if [[ -n "$previous_state" && "$previous_state" != "$current_state" ]]; then
   state_since="$now"
   if [[ "$previous_state" == "on-charge" && "$current_state" == "on-battery" ]]; then
     last_charge_end="$now"
+    ((continuity == 1)) || charge_session_valid=0
   elif [[ "$previous_state" == "on-battery" && "$current_state" == "on-charge" ]]; then
     last_charge_start="$now"
     last_charge_end=0
+    charge_start_levels=$(capture_battery_levels)
+    charge_session_valid=$continuity
   fi
 elif [[ -z "$previous_state" || "$continuity" == 0 ]]; then
   # Unknown initial or interrupted session: wait for a real transition before showing a time.
   state_since=0
+  charge_session_valid=0
+fi
+
+# An event is authoritative even if the fallback timer observed the state first.
+if ((power_event == 1)) && [[ $current_state == "on-charge" && $charge_session_valid != 1 ]]; then
+  state_since=$now
+  last_charge_start=$now
+  charge_start_levels=$(capture_battery_levels)
+  charge_session_valid=1
 fi
 
 umask 077
@@ -68,5 +235,15 @@ tmp_file="$state_file.tmp.$$"
   printf 'last_charge_end=%q\n' "$last_charge_end"
   printf 'last_charge_start=%q\n' "$last_charge_start"
   printf 'last_observed=%q\n' "$now"
+  printf 'charge_start_levels=%q\n' "$charge_start_levels"
+  printf 'charge_session_valid=%q\n' "$charge_session_valid"
 } > "$tmp_file"
 mv -f "$tmp_file" "$state_file"
+
+if ((power_event == 1)); then
+  if [[ $current_state == "on-charge" ]]; then
+    send_charge_notification
+  else
+    send_unplug_notification
+  fi
+fi

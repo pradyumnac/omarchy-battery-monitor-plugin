@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Check that this machine can run the battery session tracker before
+# install-session-tracker touches anything. Safe to run standalone and
+# repeatedly (`make doctor`) — it never writes state.
+#
+# Exits 0 when every hard requirement passes (warnings are informational and
+# do not block install). Exits 1 and prints a report otherwise.
+
+set -uo pipefail
+
+power_supply_root="${POWER_SUPPLY_ROOT:-/sys/class/power_supply}"
+systemctl_command="${BATTERY_SESSION_SYSTEMCTL_COMMAND:-systemctl}"
+monitor_command="${BATTERY_SESSION_MONITOR_COMMAND:-upower}"
+notification_command="${BATTERY_SESSION_NOTIFY_COMMAND:-omarchy-notification-send}"
+
+hard_failures=0
+report=()
+
+check_ok() {
+  report+=("  [ok]   $1")
+}
+
+check_fail() {
+  report+=("  [fail] $1")
+  hard_failures=$((hard_failures + 1))
+}
+
+check_warn() {
+  report+=("  [warn] $1")
+}
+
+# A laptop battery must be present, or the tracker has nothing to track.
+battery_found=0
+if [[ -d "$power_supply_root" ]]; then
+  for battery_dir in "$power_supply_root"/BAT*; do
+    [[ -f "$battery_dir/present" && "$(<"$battery_dir/present")" == "1" ]] || continue
+    battery_found=1
+    break
+  done
+fi
+if ((battery_found == 1)); then
+  check_ok "battery present under $power_supply_root"
+else
+  check_fail "no present battery under $power_supply_root (this looks like a desktop; the tracker refuses to install without a battery)"
+fi
+
+if command -v -- "$systemctl_command" >/dev/null 2>&1; then
+  if "$systemctl_command" --user show-environment >/dev/null 2>&1; then
+    check_ok "systemd user session reachable ($systemctl_command --user)"
+  else
+    check_fail "$systemctl_command found but the user session is unreachable; the tracker installs as a user service and needs a logind session (is this an SSH session without lingering enabled?)"
+  fi
+else
+  check_fail "$systemctl_command not found; the tracker installs as a systemd --user service"
+fi
+
+if command -v -- "$monitor_command" >/dev/null 2>&1; then
+  check_ok "$monitor_command found"
+else
+  check_fail "$monitor_command not found; battery-session-monitor needs it to watch power events"
+fi
+
+if command -v -- "$notification_command" >/dev/null 2>&1; then
+  check_ok "$notification_command found"
+else
+  check_warn "$notification_command not found; sessions will still be recorded but no desktop notifications will be sent"
+fi
+
+printf 'Battery session tracker preflight:\n'
+printf '%s\n' "${report[@]}"
+
+if ((hard_failures > 0)); then
+  printf '\n%d check(s) failed; refusing to install.\n' "$hard_failures" >&2
+  exit 1
+fi
+
+printf '\nReady to install.\n'
