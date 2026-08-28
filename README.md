@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Omarchy](https://img.shields.io/badge/Omarchy-compatible-7f5af0)](https://omarchy.org/)
 
-![Omarchy Battery Monitor Plugin](screenshots/power-panel.png)
+![Omarchy Battery Monitor Plugin](screenshots/panel-detail.png)
 
 Built for dual-battery ThinkPads and other UPower laptops. See the combined
 picture at a glance, then inspect each physical battery when you need detail.
