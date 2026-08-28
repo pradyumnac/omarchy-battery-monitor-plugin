@@ -1,13 +1,13 @@
-.PHONY: check test install uninstall reload status doctor
+.PHONY: check test install uninstall reload status preflight doctor
 
 PLUGIN_DIR ?= $(HOME)/.config/omarchy/plugins/doe.power
 export PLUGIN_DIR
 
 # Syntax and lint checks only. Run `make test` separately for the test suite.
 check:
-	bash -n tracker/battery-session-tracker tracker/battery-session-monitor tracker/power-supply.sh tracker/battery-session-preflight tracker/install-session-tracker tracker/uninstall-session-tracker
+	bash -n service/battery-session-tracker service/battery-session-monitor service/power-supply.sh scripts/battery-session-preflight scripts/install-session-tracker scripts/uninstall-session-tracker
 	# Service executables exist only after `make install`; verify the static timer here.
-	systemd-analyze verify tracker/battery-session-tracker.timer
+	systemd-analyze verify service/battery-session-tracker.timer
 	qmllint_bin=$$(command -v qmllint 2>/dev/null || command -v /usr/lib/qt6/bin/qmllint 2>/dev/null || true); \
 	if [ -n "$$qmllint_bin" ]; then \
 		"$$qmllint_bin" \
@@ -31,7 +31,7 @@ test:
 # Install the plugin and its user-level tracker, then reload the running
 # Omarchy shell so it picks up the installed panel and tracker.
 install:
-	tracker/install-session-tracker
+	scripts/install-session-tracker
 	$(MAKE) reload
 
 # Undo `make install`: stop and remove the service, the installed plugin and
@@ -39,7 +39,7 @@ install:
 # Omarchy shell so the panel disappears. The machine is left as if the
 # plugin had never been installed.
 uninstall:
-	tracker/uninstall-session-tracker
+	scripts/uninstall-session-tracker
 	$(MAKE) reload
 
 # Ask the running Omarchy shell to rescan and reload plugins in place, so it
@@ -57,5 +57,8 @@ status:
 	@cat "$${XDG_STATE_HOME:-$$HOME/.local/state}/battery-session/state" 2>/dev/null || true
 
 # Check this machine is ready to install, without installing anything.
-doctor:
-	tracker/battery-session-preflight
+preflight:
+	scripts/battery-session-preflight
+
+# Alias for `make preflight`.
+doctor: preflight

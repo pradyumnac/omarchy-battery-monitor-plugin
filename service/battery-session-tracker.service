@@ -4,4 +4,4 @@ After=graphical-session.target
 
 [Service]
 Type=oneshot
-ExecStart=%h/.config/omarchy/plugins/doe.power/tracker/battery-session-tracker --once
+ExecStart=%h/.config/omarchy/plugins/doe.power/service/battery-session-tracker --once

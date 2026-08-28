@@ -1,7 +1,8 @@
 # Agent essentials
 
 - `Panel.qml`, `Model.js`, and `manifest.json` are the Omarchy plugin.
-- `tracker/` contains the user-level session tracker and systemd timer.
+- `service/` contains the tracker, the monitor, and their systemd units.
+- `scripts/` contains the one-shot install/uninstall/preflight scripts.
 - Run `make check` before committing; use `make install` / `make uninstall`
   for installation and removal.
 - Keep runtime state, host paths, credentials, serials, and personal data out

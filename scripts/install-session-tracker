@@ -9,10 +9,11 @@ log_write() {
   printf 'install: wrote %s\n' "$1"
 }
 
-tracker_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-source_dir="$(dirname "$tracker_source")"
+scripts_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+source_dir="$(dirname "$scripts_source")"
+service_source="$source_dir/service"
 
-"$tracker_source/battery-session-preflight"
+"$scripts_source/battery-session-preflight"
 
 account_home=$(getent passwd "$(id -u)" | cut -d: -f6)
 [[ -n $account_home ]] || {
@@ -31,9 +32,10 @@ for write_dir in "$plugin_dir" "$unit_dir"; do
     ;;
   esac
 done
-mkdir -p "$plugin_dir" "$plugin_dir/tracker" "$unit_dir"
+mkdir -p "$plugin_dir" "$plugin_dir/scripts" "$plugin_dir/service" "$unit_dir"
 log_write "$plugin_dir/"
-log_write "$plugin_dir/tracker/"
+log_write "$plugin_dir/scripts/"
+log_write "$plugin_dir/service/"
 
 # Copy a standalone checkout into the standard Omarchy plugin location. If
 # the checkout is already installed there, avoid copying files onto itself.
@@ -44,29 +46,38 @@ if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
     log_write "$plugin_dir/$name"
   done
 
-  tracker_files=(
+  # Lifecycle scripts: run once, by hand or by make.
+  admin_files=(
+    battery-session-preflight
+    install-session-tracker
+    uninstall-session-tracker
+  )
+  for name in "${admin_files[@]}"; do
+    cp -a -- "$source_dir/scripts/$name" "$plugin_dir/scripts/"
+    log_write "$plugin_dir/scripts/$name"
+  done
+
+  # Service: the long-running tracker and monitor, plus their units.
+  service_files=(
     battery-session-tracker
     battery-session-tracker.service
     battery-session-tracker.timer
     battery-session-monitor
     battery-session-monitor.service
     power-supply.sh
-    battery-session-preflight
-    install-session-tracker
-    uninstall-session-tracker
   )
-  for name in "${tracker_files[@]}"; do
-    cp -a -- "$source_dir/tracker/$name" "$plugin_dir/tracker/"
-    log_write "$plugin_dir/tracker/$name"
+  for name in "${service_files[@]}"; do
+    cp -a -- "$source_dir/service/$name" "$plugin_dir/service/"
+    log_write "$plugin_dir/service/$name"
   done
-  chmod +x "$plugin_dir/tracker/battery-session-tracker" \
-    "$plugin_dir/tracker/battery-session-monitor" \
-    "$plugin_dir/tracker/battery-session-preflight" \
-    "$plugin_dir/tracker/install-session-tracker" \
-    "$plugin_dir/tracker/uninstall-session-tracker"
+  chmod +x "$plugin_dir/scripts/battery-session-preflight" \
+    "$plugin_dir/scripts/install-session-tracker" \
+    "$plugin_dir/scripts/uninstall-session-tracker" \
+    "$plugin_dir/service/battery-session-tracker" \
+    "$plugin_dir/service/battery-session-monitor"
 fi
 
-ln -sfn "$plugin_dir/tracker/battery-session-tracker" "$unit_dir/battery-session-tracker"
+ln -sfn "$plugin_dir/service/battery-session-tracker" "$unit_dir/battery-session-tracker"
 log_write "$unit_dir/battery-session-tracker (symlink)"
 
 # A unit cannot expand PLUGIN_DIR, so write each resolved executable path into
@@ -91,13 +102,13 @@ write_service_unit() {
   log_write "$output"
 }
 
-tracker_exec=$(escape_unit_exec "$plugin_dir/tracker/battery-session-tracker")
-monitor_exec=$(escape_unit_exec "$plugin_dir/tracker/battery-session-monitor")
-write_service_unit "$tracker_source/battery-session-tracker.service" \
+tracker_exec=$(escape_unit_exec "$plugin_dir/service/battery-session-tracker")
+monitor_exec=$(escape_unit_exec "$plugin_dir/service/battery-session-monitor")
+write_service_unit "$service_source/battery-session-tracker.service" \
   "$unit_dir/battery-session-tracker.service" "$tracker_exec" " --once"
-write_service_unit "$tracker_source/battery-session-monitor.service" \
+write_service_unit "$service_source/battery-session-monitor.service" \
   "$unit_dir/battery-session-monitor.service" "$monitor_exec" ""
-ln -sfn "$plugin_dir/tracker/battery-session-tracker.timer" "$unit_dir/battery-session-tracker.timer"
+ln -sfn "$plugin_dir/service/battery-session-tracker.timer" "$unit_dir/battery-session-tracker.timer"
 log_write "$unit_dir/battery-session-tracker.timer (symlink)"
 
 systemctl --user daemon-reload

@@ -73,6 +73,16 @@ was before you installed.
 - UPower and `systemctl --user`
 - A Nerd Font available to the Omarchy shell
 
+## Repo map
+
+| Path | What's there |
+| --- | --- |
+| `Panel.qml`, `Model.js`, `manifest.json` | The Omarchy bar widget |
+| `service/` | The tracker, the monitor, and their systemd units — installed and run long-term |
+| `scripts/` | `install`/`uninstall`/`preflight` — one-shot, run by `make` |
+| `tests/` | Node test suite (`make test`) |
+| `docs/` | [Charging session experience](docs/charging-session-experience.md): the state machine, rules, and state file |
+
 ## Contributing
 
 Run `make check` before submitting a change. See

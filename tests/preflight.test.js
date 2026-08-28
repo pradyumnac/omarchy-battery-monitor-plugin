@@ -8,13 +8,13 @@ const { spawnSync } = require("node:child_process");
 const preflight = path.join(
   __dirname,
   "..",
-  "tracker",
+  "scripts",
   "battery-session-preflight",
 );
 const installer = path.join(
   __dirname,
   "..",
-  "tracker",
+  "scripts",
   "install-session-tracker",
 );
 const testRoot = path.join(
@@ -125,7 +125,8 @@ test("installer refuses to install on a machine with no battery", () => {
 
     assert.equal(result.status, 1);
     assert.match(result.stdout, /\[fail\]\s+no present battery/);
-    assert.equal(fs.existsSync(path.join(plugin, "tracker")), false);
+    assert.equal(fs.existsSync(path.join(plugin, "scripts")), false);
+    assert.equal(fs.existsSync(path.join(plugin, "service")), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(plugin, { recursive: true, force: true });

@@ -4,7 +4,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.config/omarchy/plugins/doe.power/tracker/battery-session-monitor
+ExecStart=%h/.config/omarchy/plugins/doe.power/service/battery-session-monitor
 Restart=always
 RestartSec=2s
 

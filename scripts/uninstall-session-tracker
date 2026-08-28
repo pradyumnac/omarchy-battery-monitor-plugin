@@ -17,8 +17,8 @@ remove_path() {
   log_remove "$1"
 }
 
-tracker_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-source_dir="$(dirname "$tracker_source")"
+scripts_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+source_dir="$(dirname "$scripts_source")"
 
 account_home=$(getent passwd "$(id -u)" | cut -d: -f6)
 [[ -n $account_home ]] || {
@@ -72,7 +72,8 @@ if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
   for name in "${plugin_files[@]}"; do
     remove_path "$plugin_dir/$name"
   done
-  remove_path "$plugin_dir/tracker"
+  remove_path "$plugin_dir/scripts"
+  remove_path "$plugin_dir/service"
   rmdir -- "$plugin_dir" 2>/dev/null && log_remove "$plugin_dir"
 fi
 

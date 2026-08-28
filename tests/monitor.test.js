@@ -8,7 +8,7 @@ const { execFileSync } = require("node:child_process");
 const monitor = path.join(
   __dirname,
   "..",
-  "tracker",
+  "service",
   "battery-session-monitor",
 );
 const testRoot = path.join(

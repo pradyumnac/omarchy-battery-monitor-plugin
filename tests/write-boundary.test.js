@@ -6,13 +6,13 @@ const { spawnSync } = require("node:child_process");
 const tracker = path.join(
   __dirname,
   "..",
-  "tracker",
+  "service",
   "battery-session-tracker",
 );
 const installer = path.join(
   __dirname,
   "..",
-  "tracker",
+  "scripts",
   "install-session-tracker",
 );
 
