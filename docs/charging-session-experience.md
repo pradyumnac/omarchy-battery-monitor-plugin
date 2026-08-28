@@ -182,8 +182,28 @@ current state file.
 | Added or removed battery during a session | No |
 | Real T480 AC and USB-C supplies | Manual/community verification |
 
-## Visual review assets
+## Review checklist
 
-Mermaid diagrams render directly on GitHub. Runtime screenshots belong under
-[`docs/images/`](images/). Use the image guide there for filenames, privacy,
-and expected captures.
+Use this single checklist for design review, implementation handoff, and manual
+acceptance on a laptop:
+
+- [ ] Connect the charger with BAT0 and BAT1 present.
+- [ ] Confirm the notification names batteries that charge or remain held.
+- [ ] Confirm combined level, rate, and time to full agree with the widget.
+- [ ] Leave the charger connected long enough for a measurable change.
+- [ ] Disconnect it and wait for the next 30-second tracker observation.
+- [ ] Confirm the wrap-up shows approximate duration and combined gain.
+- [ ] Confirm each battery gain uses percentage points.
+- [ ] Reconnect and confirm `Last` clears and a new session begins.
+- [ ] Repeat with one battery absent and with a charge threshold active.
+- [ ] Confirm repeated polls do not create duplicate notifications.
+- [ ] Confirm unknown history produces current-state facts, not invented deltas.
+
+For visual review, capture the connected widget, plug notification, unplug
+summary, threshold state, and unknown-session fallback. Crop captures to the
+relevant UI and remove hostnames, serial numbers, notifications with personal
+content, and other host-specific data.
+
+The Mermaid diagrams in this document render directly on GitHub. Keep future
+flow, copy, acceptance, and screenshot guidance here so this remains the one
+reference for charging-session behavior.
