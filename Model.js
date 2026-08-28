@@ -13,9 +13,15 @@ function parseKeyValue(raw) {
   var next = {};
   var lines = String(raw || "").split("\n");
   for (var i = 0; i < lines.length; i++) {
-    var idx = lines[i].indexOf("\t");
-    if (idx <= 0) continue;
-    next[lines[i].substring(0, idx)] = lines[i].substring(idx + 1).trim();
+    var separator = lines[i].indexOf("\t");
+    var separatorLength = 1;
+    if (separator < 0) {
+      separator = lines[i].indexOf("=");
+    }
+    if (separator <= 0) continue;
+    next[lines[i].slice(0, separator)] = lines[i]
+      .slice(separator + separatorLength)
+      .trim();
   }
   return next;
 }

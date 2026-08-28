@@ -21,7 +21,10 @@ Panel {
   property real nowEpochSeconds: Date.now() / 1000
   readonly property string systemUptimeStr: Model.formatElapsed(root.uptimeSeconds)
   readonly property string sinceChargeStr: {
-    var start = Number(root.chargeHistory.stateStartEpoch || root.chargeHistory.chargeEndEpoch || 0)
+    var start = Number(root.chargeHistory.stateStartEpoch || 0)
+    if (root.chargeHistory.state === "on-charge") {
+      start = start || Number(root.chargeHistory.chargeStartEpoch || 0)
+    }
     if (!(start > 0)) return "—"
     return Model.formatSessionDuration(root.nowEpochSeconds - start)
   }
@@ -192,6 +195,7 @@ Panel {
     if (Object.keys(next).length === 0) return
     chargeHistory = {
       stateStartEpoch: Number(next.state_since || 0),
+      chargeStartEpoch: Number(next.last_charge_start || 0),
       chargeEndEpoch: Number(next.last_charge_end || 0),
       state: next.previous_state || ""
     }

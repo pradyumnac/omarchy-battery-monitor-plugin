@@ -18,6 +18,9 @@
 - Tracks real AC ↔ battery transitions with a persistent user-level timer
 - Hides battery UI on desktops without laptop batteries
 
+See [battery session behavior](docs/battery-session-behavior.md) for charger,
+dual-battery, threshold, polling-delay, and failure scenarios.
+
 UPower history is sampled data rather than an event log. The session tracker avoids presenting a recent sample as a false “last charge” event.
 
 ## Install
@@ -30,7 +33,7 @@ cd omarchy-battery-monitor-plugin
 make install
 ```
 
-`make install` copies the plugin to `~/.config/omarchy/plugins/doe.power`, installs the user systemd timer, and starts it. It is safe to run repeatedly.
+`make install` copies the plugin to `~/.config/omarchy/plugins/doe.power`, installs the user systemd timer, and starts it. It is safe to run repeatedly. Set `PLUGIN_DIR` to use another plugin location.
 
 Reload Omarchy after installation:
 
@@ -55,6 +58,8 @@ make status
 
 Test AC connected, AC disconnected, threshold/fully-charged states, one battery, two batteries, and a desktop without laptop batteries. Keep runtime state out of Git.
 
+**Open verification issue:** Confirm on supported laptops that mains supplies expose `type=Mains` and that USB-C and alternate AC adapters produce correct transitions. Do not close this issue until hardware verification is complete.
+
 ## Repository layout
 
 | File | Purpose |
@@ -65,6 +70,7 @@ Test AC connected, AC disconnected, threshold/fully-charged states, one battery,
 | `tracker/*.service` / `*.timer` | User systemd integration |
 | `tracker/install-session-tracker` | Internal installer used by `make install` |
 | `CONTRIBUTING.md` | Contribution and testing guide |
+| `docs/battery-session-behavior.md` | Charger and battery session behavior reference |
 
 ## Privacy
 

@@ -4,13 +4,15 @@
 
 set -euo pipefail
 
-state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/battery-session"
+state_dir="${BATTERY_SESSION_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/battery-session}"
 state_file="$state_dir/state"
+power_supply_root="${POWER_SUPPLY_ROOT:-/sys/class/power_supply}"
 mkdir -p "$state_dir"
 
 ac_online=0
-for online_file in /sys/class/power_supply/AC*/online /sys/class/power_supply/ACAD*/online; do
-  if [[ -f "$online_file" ]] && [[ "$(<"$online_file")" == "1" ]]; then
+for supply_dir in "$power_supply_root"/*; do
+  if [[ -f "$supply_dir/type" && "$(<"$supply_dir/type")" == "Mains" \
+    && -f "$supply_dir/online" && "$(<"$supply_dir/online")" == "1" ]]; then
     ac_online=1
     break
   fi
@@ -18,7 +20,7 @@ done
 
 # Do not create a fake battery session on desktops.
 has_battery=0
-for present_file in /sys/class/power_supply/BAT*/present; do
+for present_file in "$power_supply_root"/BAT*/present; do
   if [[ -f "$present_file" ]] && [[ "$(<"$present_file")" == "1" ]]; then
     has_battery=1
     break
@@ -28,16 +30,21 @@ done
 
 current_state="on-battery"
 (( ac_online == 1 )) && current_state="on-charge"
-now=$(date +%s)
-
 previous_state=""
 state_since=0
 last_charge_end=0
 last_charge_start=0
+last_observed=0
 if [[ -f "$state_file" ]]; then
   # The file is created and owned by this user-level service.
   # shellcheck disable=SC1090
   source "$state_file"
+fi
+
+now=$(date +%s)
+continuity=1
+if [[ "$last_observed" =~ ^[0-9]+$ ]] && (( last_observed > 0 )) && (( now < last_observed || now - last_observed > 90 )); then
+  continuity=0
 fi
 
 if [[ -n "$previous_state" && "$previous_state" != "$current_state" ]]; then
@@ -47,13 +54,9 @@ if [[ -n "$previous_state" && "$previous_state" != "$current_state" ]]; then
   elif [[ "$previous_state" == "on-battery" && "$current_state" == "on-charge" ]]; then
     last_charge_start="$now"
   fi
-elif [[ -z "$previous_state" ]]; then
-  # Unknown initial session: wait for a real transition before showing a time.
+elif [[ -z "$previous_state" || "$continuity" == 0 ]]; then
+  # Unknown initial or interrupted session: wait for a real transition before showing a time.
   state_since=0
-fi
-
-if [[ "$current_state" == "on-charge" && "$previous_state" == "on-charge" && "$last_charge_start" == 0 ]]; then
-  last_charge_start=0
 fi
 
 umask 077
@@ -63,5 +66,6 @@ tmp_file="$state_file.tmp.$$"
   printf 'state_since=%q\n' "$state_since"
   printf 'last_charge_end=%q\n' "$last_charge_end"
   printf 'last_charge_start=%q\n' "$last_charge_start"
+  printf 'last_observed=%q\n' "$now"
 } > "$tmp_file"
 mv -f "$tmp_file" "$state_file"

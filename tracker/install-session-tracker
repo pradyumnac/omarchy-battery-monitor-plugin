@@ -11,7 +11,7 @@ unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 mkdir -p "$plugin_dir" "$plugin_dir/tracker" "$unit_dir"
 
 # Copy a standalone checkout into the standard Omarchy plugin location. If
-# the checkout is already installed there, so avoid copying files onto itself.
+# the checkout is already installed there, avoid copying files onto itself.
 if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
   cp -a -- "$source_dir/Panel.qml" "$source_dir/Model.js" "$source_dir/manifest.json" \
     "$source_dir/README.md" "$source_dir/LICENSE" "$source_dir/AGENTS.md" "$plugin_dir/"
@@ -23,7 +23,22 @@ if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
 fi
 
 ln -sfn "$plugin_dir/tracker/battery-session-tracker" "$unit_dir/battery-session-tracker"
-ln -sfn "$plugin_dir/tracker/battery-session-tracker.service" "$unit_dir/battery-session-tracker.service"
+
+# A unit cannot expand PLUGIN_DIR, so write the resolved executable path into
+# the user service. Unit quoting keeps spaces and special characters intact.
+tracker_exec="$plugin_dir/tracker/battery-session-tracker"
+tracker_exec="${tracker_exec//\\/\\\\}"
+tracker_exec="${tracker_exec//\"/\\\"}"
+tracker_exec="${tracker_exec//%/%%}"
+tracker_exec="\"$tracker_exec\""
+service_template="$tracker_source/battery-session-tracker.service"
+while IFS= read -r line; do
+  if [[ "$line" == ExecStart=* ]]; then
+    printf 'ExecStart=%s --once\n' "$tracker_exec"
+  else
+    printf '%s\n' "$line"
+  fi
+done < "$service_template" > "$unit_dir/battery-session-tracker.service"
 ln -sfn "$plugin_dir/tracker/battery-session-tracker.timer" "$unit_dir/battery-session-tracker.timer"
 
 systemctl --user daemon-reload
