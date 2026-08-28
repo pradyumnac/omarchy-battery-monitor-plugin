@@ -35,10 +35,12 @@ cd omarchy-battery-monitor-plugin
 make install
 ```
 
-Reload the Omarchy shell:
+`make install` puts the widget in the bar itself — it rescans and enables the
+plugin in the running Omarchy shell, replacing the built-in `omarchy.power`
+widget, so no manual reload is needed. If the shell isn't running (no live
+session), restart it once you're in one:
 
 ```sh
-omarchy-shell shell rescanPlugins
 omarchy restart shell
 ```
 
@@ -57,10 +59,12 @@ make doctor
 make uninstall
 ```
 
-This stops and removes the tracker service, deletes the installed plugin and
-tracker files from `~/.config/omarchy/plugins/doe.power`, removes the session
-state, and reloads the Omarchy shell so the panel disappears. It undoes
-`make install` completely.
+This disables the widget in the running Omarchy shell (restoring the built-in
+`omarchy.power` widget in its place), stops and removes the tracker service,
+deletes the installed plugin and tracker files from
+`~/.config/omarchy/plugins/doe.power`, and removes the session state. It
+undoes `make install` completely, leaving your Omarchy config exactly as it
+was before you installed.
 
 ## Requirements
 
