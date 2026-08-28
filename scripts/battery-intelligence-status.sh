@@ -40,8 +40,8 @@ format_power() {
 
 service_state() {
   local unit=$1
-  if command -v -- "$systemctl_command" >/dev/null 2>&1 \
-    && "$systemctl_command" --user is-active --quiet "$unit" 2>/dev/null; then
+  if command -v -- "$systemctl_command" >/dev/null 2>&1 &&
+    "$systemctl_command" --user is-active --quiet "$unit" 2>/dev/null; then
     printf 'active'
   else
     printf 'inactive'
@@ -112,10 +112,10 @@ if [[ -f "$history_file" ]]; then
     }
     END { printf "%d\t%d\t%d\t%s", total, recent, sessions, last }
   ' "$history_file")
-  IFS=$'\t' read -r total recent sessions last_row <<< "$history_stats"
+  IFS=$'\t' read -r total recent sessions last_row <<<"$history_stats"
   printf '  History: %s valid rows (%s recent / %s sessions)\n' "$total" "$recent" "$sessions"
   if [[ -n "${last_row:-}" ]]; then
-    IFS=$'\t' read -r last_epoch _last_session last_draw last_capacity <<< "$last_row"
+    IFS=$'\t' read -r last_epoch _last_session last_draw last_capacity <<<"$last_row"
     printf '  Last recorded window: %s at %s (%s draw, %s capacity)\n' \
       "$(format_duration $((15 * 60)))" "$last_epoch" \
       "$(format_power "$last_draw")" "$(format_energy "$last_capacity")"

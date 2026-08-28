@@ -93,7 +93,7 @@ while :; do
           pending_charge=0
         else
           pending_charge=1
-          pending_deadline=$(( $(date +%s) + pending_charge_timeout ))
+          pending_deadline=$(($(date +%s) + pending_charge_timeout))
         fi
       else
         pending_charge=0

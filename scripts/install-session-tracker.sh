@@ -98,7 +98,7 @@ write_service_unit() {
     else
       printf '%s\n' "$line"
     fi
-  done < "$template" > "$output"
+  done <"$template" >"$output"
   log_write "$output"
 }
 
