@@ -1,13 +1,15 @@
-.PHONY: check test install uninstall reload status preflight doctor
+# shellcheck disable=all
+.PHONY: check test install uninstall reload status intelligence-status preflight doctor
 
 PLUGIN_DIR ?= $(HOME)/.config/omarchy/plugins/doe.power
 export PLUGIN_DIR
 
 # Syntax and lint checks only. Run `make test` separately for the test suite.
 check:
-	bash -n service/battery-session-tracker service/battery-session-monitor service/power-supply.sh scripts/battery-session-preflight scripts/install-session-tracker scripts/uninstall-session-tracker
+	bash -n service/battery-session-tracker service/battery-session-monitor service/power-supply.sh scripts/battery-session-preflight scripts/install-session-tracker scripts/uninstall-session-tracker scripts/battery-intelligence-status
 	# Service executables exist only after `make install`; verify the static timer here.
 	systemd-analyze verify service/battery-session-tracker.timer
+	# shellcheck disable=SC1036,SC1088
 	qmllint_bin=$$(command -v qmllint 2>/dev/null || command -v /usr/lib/qt6/bin/qmllint 2>/dev/null || true); \
 	if [ -n "$$qmllint_bin" ]; then \
 		"$$qmllint_bin" \
@@ -55,6 +57,10 @@ reload:
 status:
 	systemctl --user status battery-session-tracker.timer --no-pager
 	@cat "$${XDG_STATE_HOME:-$$HOME/.local/state}/battery-session/state" 2>/dev/null || true
+
+# Show service health, recorded observations, and model learning progress.
+intelligence-status:
+	scripts/battery-intelligence-status
 
 # Check this machine is ready to install, without installing anything.
 preflight:
