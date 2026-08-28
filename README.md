@@ -51,6 +51,17 @@ any time, with:
 make doctor
 ```
 
+## Uninstall
+
+```sh
+make uninstall
+```
+
+This stops and removes the tracker service, deletes the installed plugin and
+tracker files from `~/.config/omarchy/plugins/doe.power`, removes the session
+state, and reloads the Omarchy shell so the panel disappears. It undoes
+`make install` completely.
+
 ## Requirements
 
 - Omarchy with Quickshell

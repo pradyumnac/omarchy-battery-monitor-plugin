@@ -1,4 +1,4 @@
-.PHONY: check test install clean reload status doctor
+.PHONY: check test install uninstall reload status doctor
 
 PLUGIN_DIR ?= $(HOME)/.config/omarchy/plugins/doe.power
 export PLUGIN_DIR
@@ -22,11 +22,11 @@ install: check
 	tracker/install-session-tracker
 	$(MAKE) reload
 
-# Stop and remove the service, the installed tracker files, and the
-# recorded session state, then reload the running Omarchy shell so it picks
-# up the removal. The machine is left as if the plugin had never been
-# installed.
-clean:
+# Undo `make install`: stop and remove the service, the installed plugin and
+# tracker files, and the recorded session state, then reload the running
+# Omarchy shell so the panel disappears. The machine is left as if the
+# plugin had never been installed.
+uninstall:
 	tracker/uninstall-session-tracker
 	$(MAKE) reload
 

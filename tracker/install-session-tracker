@@ -104,5 +104,13 @@ systemctl --user daemon-reload
 systemctl --user enable --now battery-session-tracker.timer battery-session-monitor.service
 systemctl --user start battery-session-tracker.service
 
+# Put the bar widget in the bar. Omarchy owns this swap in shell.json (it
+# replaces the omarchy.power layout entry, per manifest.json's clonedFrom);
+# a no-op if omarchy-shell isn't reachable (e.g. no live session).
+if command -v omarchy-shell >/dev/null 2>&1; then
+  omarchy-shell -q shell rescanPlugins
+  omarchy-shell -q shell enablePlugin doe.power '{}'
+fi
+
 printf 'Battery session tracker installed and running.\nState: %s\n' \
   "${XDG_STATE_HOME:-$HOME/.local/state}/battery-session/state"

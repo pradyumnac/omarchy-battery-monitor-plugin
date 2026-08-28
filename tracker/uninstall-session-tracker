@@ -39,6 +39,16 @@ for write_dir in "$plugin_dir" "$unit_dir" "$state_dir"; do
   esac
 done
 
+# Take the bar widget out of the bar before anything else. Omarchy restores
+# the omarchy.power layout entry it replaced (per manifest.json's
+# clonedFrom) only while manifest.json is still readable from plugin_dir, so
+# this has to run before the plugin files are removed below. A no-op if
+# omarchy-shell isn't reachable (e.g. no live session).
+if command -v omarchy-shell >/dev/null 2>&1; then
+  omarchy-shell -q shell rescanPlugins
+  omarchy-shell -q shell setPluginEnabled doe.power false
+fi
+
 systemctl --user disable --now \
   battery-session-tracker.timer battery-session-monitor.service \
   >/dev/null 2>&1 || true
@@ -54,11 +64,16 @@ systemctl --user reset-failed \
   battery-session-tracker.timer battery-session-tracker.service \
   battery-session-monitor.service >/dev/null 2>&1 || true
 
-# Only remove the copied tracker tree, and only when this checkout was
-# copied into the plugin dir rather than running from it directly (the same
-# guard install-session-tracker uses before copying).
+# Only remove the copied plugin and tracker files, and only when this
+# checkout was copied into the plugin dir rather than running from it
+# directly (the same guard install-session-tracker uses before copying).
 if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
+  plugin_files=(Panel.qml Model.js manifest.json README.md LICENSE AGENTS.md)
+  for name in "${plugin_files[@]}"; do
+    remove_path "$plugin_dir/$name"
+  done
   remove_path "$plugin_dir/tracker"
+  rmdir -- "$plugin_dir" 2>/dev/null && log_remove "$plugin_dir"
 fi
 
 remove_path "$state_dir"
