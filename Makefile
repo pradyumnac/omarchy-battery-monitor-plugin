@@ -32,7 +32,7 @@ test:
 # Omarchy shell so it picks up the installed panel and tracker.
 install:
 	scripts/install-session-tracker
-	$(MAKE) reload
+	@$(MAKE) --no-print-directory reload
 
 # Undo `make install`: stop and remove the service, the installed plugin and
 # tracker files, and the recorded session state, then reload the running
@@ -40,7 +40,7 @@ install:
 # plugin had never been installed.
 uninstall:
 	scripts/uninstall-session-tracker
-	$(MAKE) reload
+	@$(MAKE) --no-print-directory reload
 
 # Ask the running Omarchy shell to rescan and reload plugins in place, so it
 # picks up this plugin's changes without restarting the whole shell process.
