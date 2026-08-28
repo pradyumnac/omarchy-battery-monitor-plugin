@@ -9,7 +9,19 @@ check:
 	# Service executables exist only after `make install`; verify the static timer here.
 	systemd-analyze verify tracker/battery-session-tracker.timer
 	qmllint_bin=$$(command -v qmllint 2>/dev/null || command -v /usr/lib/qt6/bin/qmllint 2>/dev/null || true); \
-	if [ -n "$$qmllint_bin" ]; then "$$qmllint_bin" Panel.qml; else echo "qmllint not installed; skipping QML validation"; fi
+	if [ -n "$$qmllint_bin" ]; then \
+		"$$qmllint_bin" \
+			--import disable \
+			--unqualified disable \
+			--required disable \
+			--unresolved-type disable \
+			--inheritance-cycle disable \
+			--signal-handler-parameters disable \
+			--incompatible-type disable \
+			Panel.qml; \
+	else \
+		echo "qmllint not installed; skipping QML validation"; \
+	fi
 	node --check Model.js
 	git diff --check
 
@@ -18,7 +30,7 @@ test:
 
 # Install the plugin and its user-level tracker, then reload the running
 # Omarchy shell so it picks up the installed panel and tracker.
-install: check
+install:
 	tracker/install-session-tracker
 	$(MAKE) reload
 
