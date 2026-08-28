@@ -73,6 +73,10 @@ test("records charger removal as the end of charging", () => {
     assert.match(state, /^previous_state=on-battery$/m);
     assert.match(state, /^state_since=[1-9][0-9]*$/m);
     assert.match(state, /^last_charge_end=[1-9][0-9]*$/m);
+    fs.writeFileSync(path.join(f.root, "AC", "online"), "1\n");
+    const reconnectedState = runTracker(f);
+    assert.match(reconnectedState, /^previous_state=on-charge$/m);
+    assert.match(reconnectedState, /^last_charge_end=0$/m);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
     fs.rmSync(f.state, { recursive: true, force: true });

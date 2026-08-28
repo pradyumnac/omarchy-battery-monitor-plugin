@@ -28,7 +28,9 @@ Panel {
     if (!(start > 0)) return "—"
     return Model.formatSessionDuration(root.nowEpochSeconds - start)
   }
-  readonly property string lastChargeEndStr: Model.formatHoursSince(root.chargeHistory.chargeEndEpoch, root.nowEpochSeconds)
+  readonly property string lastChargeEndStr: root.chargeHistory.state === "on-charge"
+    ? "—"
+    : Model.formatHoursSince(root.chargeHistory.chargeEndEpoch, root.nowEpochSeconds)
   readonly property var laptopBatteries: Model.getLaptopBatteries(UPower.devices)
   // UPower can expose a display device on desktops too (for example AC power
   // or a UPS). Treat actual laptop batteries as the only reliable signal for

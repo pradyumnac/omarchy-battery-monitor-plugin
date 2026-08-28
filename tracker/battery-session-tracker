@@ -53,6 +53,7 @@ if [[ -n "$previous_state" && "$previous_state" != "$current_state" ]]; then
     last_charge_end="$now"
   elif [[ "$previous_state" == "on-battery" && "$current_state" == "on-charge" ]]; then
     last_charge_start="$now"
+    last_charge_end=0
   fi
 elif [[ -z "$previous_state" || "$continuity" == 0 ]]; then
   # Unknown initial or interrupted session: wait for a real transition before showing a time.

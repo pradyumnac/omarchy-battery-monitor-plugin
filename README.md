@@ -16,6 +16,7 @@
 - Provides laptop-only power-profile controls
 - Shows uptime and current `On battery` / `On charge` duration
 - Tracks real AC ↔ battery transitions with a persistent user-level timer
+- **Polls power state every 30 seconds; session times are approximate by up to one polling interval**
 - Hides battery UI on desktops without laptop batteries
 
 See [battery session behavior](docs/battery-session-behavior.md) for charger,
@@ -33,7 +34,7 @@ cd omarchy-battery-monitor-plugin
 make install
 ```
 
-`make install` copies the plugin to `~/.config/omarchy/plugins/doe.power`, installs the user systemd timer, and starts it. It is safe to run repeatedly. Set `PLUGIN_DIR` to use another plugin location.
+`make install` copies the plugin to `~/.config/omarchy/plugins/doe.power`, installs the user systemd timer, and starts it. The tracker polls every **30 seconds**, so charger transition times can be delayed by up to one polling interval. It is safe to run repeatedly. Set `PLUGIN_DIR` to use another plugin location.
 
 Reload Omarchy after installation:
 
