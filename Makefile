@@ -1,5 +1,5 @@
 # shellcheck disable=all
-.PHONY: check test install uninstall uninstall-purge-data reload status intelligence-status preflight doctor
+.PHONY: check test install uninstall uninstall-purge-data reload restart-shell status intelligence-status preflight doctor
 
 PLUGIN_DIR ?= $(HOME)/.config/omarchy/plugins/doe.power
 export PLUGIN_DIR
@@ -30,24 +30,24 @@ check:
 test:
 	node --test tests/*.test.js
 
-# Install the plugin and its user-level tracker, then reload the running
-# Omarchy shell so it picks up the installed panel and tracker.
+# Install the plugin and its user-level tracker, then restart the running
+# Omarchy shell so no stale QML or JavaScript component survives the update.
 install:
 	scripts/install-session-tracker.sh
-	@$(MAKE) --no-print-directory reload
+	@$(MAKE) --no-print-directory restart-shell
 
 # Undo `make install`: stop and remove the service and installed plugin files,
 # retain recorded session/intelligence data for a later reinstall, then reload
 # the running Omarchy shell so the panel disappears.
 uninstall:
 	scripts/uninstall-session-tracker.sh --keep-data
-	@$(MAKE) --no-print-directory reload
+	@$(MAKE) --no-print-directory restart-shell
 
 # Perform a complete uninstall, including all recorded session state,
 # discharge history, and intelligence metrics.
 uninstall-purge-data:
 	scripts/uninstall-session-tracker.sh
-	@$(MAKE) --no-print-directory reload
+	@$(MAKE) --no-print-directory restart-shell
 
 # Ask the running Omarchy shell to rescan and reload plugins in place, so it
 # picks up this plugin's changes without restarting the whole shell process.
@@ -57,6 +57,15 @@ reload:
 		omarchy-shell -q shell rescanPlugins; \
 	else \
 		echo "omarchy-shell not found; rescan plugins manually to pick up changes."; \
+	fi
+
+# Lifecycle operations require a fresh QML engine: plugin rescans are
+# asynchronous and can retain stale components across a rapid remove/reinstall.
+restart-shell:
+	@if command -v omarchy >/dev/null 2>&1; then \
+		omarchy restart shell; \
+	else \
+		echo "omarchy not found; restart the shell manually to apply lifecycle changes."; \
 	fi
 
 status:

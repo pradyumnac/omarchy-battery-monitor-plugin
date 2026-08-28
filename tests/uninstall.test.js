@@ -97,25 +97,30 @@ test("uninstall without --keep-data purges all collected data", () => {
   }
 });
 
-test("make exposes retaining and purging uninstall targets", () => {
+test("make lifecycle targets restart the shell", () => {
   const repository = path.join(__dirname, "..");
-  const retained = spawnSync(
-    "make",
-    ["--no-print-directory", "-n", "uninstall"],
-    { cwd: repository, encoding: "utf8" },
-  );
-  const purged = spawnSync(
-    "make",
-    ["--no-print-directory", "-n", "uninstall-purge-data"],
-    { cwd: repository, encoding: "utf8" },
-  );
+  function dryRun(target) {
+    return spawnSync("make", ["--no-print-directory", "-n", target], {
+      cwd: repository,
+      encoding: "utf8",
+    });
+  }
+
+  const installed = dryRun("install");
+  const retained = dryRun("uninstall");
+  const purged = dryRun("uninstall-purge-data");
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.match(installed.stdout, /^scripts\/install-session-tracker\.sh$/m);
+  assert.match(installed.stdout, /omarchy restart shell/);
   assert.equal(retained.status, 0, retained.stderr);
   assert.match(
     retained.stdout,
     /^scripts\/uninstall-session-tracker\.sh --keep-data$/m,
   );
+  assert.match(retained.stdout, /omarchy restart shell/);
   assert.equal(purged.status, 0, purged.stderr);
   assert.match(purged.stdout, /^scripts\/uninstall-session-tracker\.sh$/m);
+  assert.match(purged.stdout, /omarchy restart shell/);
 });
 
 test("uninstall rejects unknown options before removing anything", () => {

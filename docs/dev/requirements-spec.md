@@ -37,6 +37,7 @@ This doc is the single source of pending work. GitHub issues are archived
 | Normal uninstall retains all session and intelligence data | `tests/uninstall.test.js` |
 | Purge uninstall removes the complete data directory | `tests/uninstall.test.js` |
 | Unknown uninstall options fail before removing files | `tests/uninstall.test.js` |
+| Install and both uninstall targets perform a full shell restart | `tests/uninstall.test.js` |
 | Install refuses on a machine with no battery | `tests/preflight.test.js` |
 | Seeded history produces a current-capacity `Usual` runtime | `tests/tracker.test.js` |
 | A valid 15-minute discharge window is recorded | `tests/tracker.test.js` |

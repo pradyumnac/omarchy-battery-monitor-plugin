@@ -16,7 +16,8 @@ make install
 ```
 
 `make install` replaces the built-in `omarchy.power` widget with this plugin
-in the running Omarchy shell. No manual reload is needed.
+and restarts the Omarchy shell so a fresh QML engine loads the installed code.
+No manual reload is needed.
 
 Track the learning workflow and see what has been recorded with:
 
@@ -61,7 +62,7 @@ make uninstall
 
 This command:
 
-- Restores the built-in `omarchy.power` widget.
+- Restores the built-in `omarchy.power` widget and restarts the Omarchy shell.
 - Stops and removes the tracker service.
 - Deletes the plugin and tracker files from
   `~/.config/omarchy/plugins/doe.power`.
@@ -74,9 +75,15 @@ To remove the plugin **and permanently purge all collected data**:
 make uninstall-purge-data
 ```
 
-The purge target removes the entire battery-session state directory. Reinstalling
-after a normal `make uninstall` resumes with the retained history; reinstalling
-after `make uninstall-purge-data` starts learning from scratch.
+The purge target removes the entire battery-session state directory and also
+restarts the Omarchy shell. Reinstalling after a normal `make uninstall`
+resumes with the retained history; reinstalling after
+`make uninstall-purge-data` starts learning from scratch.
+
+All three lifecycle targets use a full shell restart rather than an in-process
+plugin rescan. Plugin rescans remain useful during development, but their
+asynchronous component reload can retain stale QML or JavaScript during a
+rapid uninstall/reinstall.
 
 ## Troubleshooting
 
