@@ -90,3 +90,9 @@ test("parseChargeHistory drops entries after the given now", () => {
     1,
   );
 });
+
+test("formats a usual full-runtime estimate", () => {
+  assert.equal(Model.formatRuntimeEstimate(5 * 60 * 60 + 20 * 60), "5h 20m");
+  assert.equal(Model.formatRuntimeEstimate(0), "");
+  assert.equal(Model.formatRuntimeEstimate("invalid"), "");
+});

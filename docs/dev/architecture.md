@@ -40,6 +40,20 @@ flowchart TD
 
 Unplug settles fast (0.22s-0.65s on a T480), so this path never waits.
 
+## Battery intelligence
+
+The tracker samples aggregate `energy_now` and usable capacity every 30 seconds
+while on battery. After 15 continuous active minutes it records a discharge
+window in the versioned user-only history file. Gaps over 90 seconds, charging,
+energy increases, implausible draw, missing measurements, and battery-topology
+changes invalidate only the active window.
+
+The model retains up to 96 valid windows for 180 days, but calculates `Usual`
+from only the most recent 30 days. It requires 12 windows across 3 discharge
+sessions and uses the median draw, then projects from the battery's current
+usable capacity. Thus `Usual` is a full-charge active-runtime estimate that
+adapts to battery health and recent usage.
+
 ## Two scripts, one state file
 
 | Script | Runs | Job |

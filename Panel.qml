@@ -18,6 +18,8 @@ Panel {
   property real uptimeSeconds: 0
   property real nowEpochSeconds: Date.now() / 1000
   readonly property string systemUptimeStr: Model.formatElapsed(root.uptimeSeconds)
+  readonly property string usualRuntimeStr: Model.formatRuntimeEstimate(root.chargeHistory.usualFullRuntimeSeconds)
+  readonly property bool usualRuntimeAvailable: usualRuntimeStr !== ""
   readonly property string sinceChargeStr: {
     var start = Number(root.chargeHistory.stateStartEpoch || 0)
     if (root.chargeHistory.state === "on-charge") {
@@ -192,6 +194,8 @@ Panel {
       stateStartEpoch: Number(next.state_since || 0),
       chargeStartEpoch: Number(next.last_charge_start || 0),
       chargeEndEpoch: Number(next.last_charge_end || 0),
+      usualFullRuntimeSeconds: Number(next.usual_full_runtime_seconds || 0),
+      usualSampleCount: Number(next.usual_sample_count || 0),
       state: next.previous_state || ""
     }
   }
@@ -529,8 +533,10 @@ Panel {
               value: root.chargeThresholdActive ? (root.batteryInfo.threshold || "-") : (root.batteryFlowIdle ? "-" : root.combinedTimeStr)
             }
             InfoPair {
-              label: "● State"
-              value: root.chargeThresholdActive ? "Holding" : (root.discharging ? "On battery" : (root.batteryFull ? "Full" : "Charging"))
+              label: root.usualRuntimeAvailable ? "≈ Usual" : "● State"
+              value: root.usualRuntimeAvailable
+                ? root.usualRuntimeStr
+                : (root.chargeThresholdActive ? "Holding" : (root.discharging ? "On battery" : (root.batteryFull ? "Full" : "Charging")))
             }
           }
         }

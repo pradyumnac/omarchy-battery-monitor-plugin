@@ -32,6 +32,13 @@ This doc is the single source of pending work. GitHub issues are archived
 | Battery with no `present` file is still tracked | `tests/tracker.test.js`, `tests/preflight.test.js` |
 | Every file write stays under the user's home directory | `tests/write-boundary.test.js` |
 | Install refuses on a machine with no battery | `tests/preflight.test.js` |
+| Seeded history produces a current-capacity `Usual` runtime | `tests/tracker.test.js` |
+| A valid 15-minute discharge window is recorded | `tests/tracker.test.js` |
+| Recent median ignores outliers and older back-reference data | `tests/tracker.test.js` |
+| History is bounded to 96 rows and 180 days | `tests/tracker.test.js` |
+| Invalid/discontinuous windows are rejected | `tests/tracker.test.js` |
+| Battery topology changes invalidate only the active window | `tests/tracker.test.js` |
+| Unknown history schemas are ignored safely | `tests/tracker.test.js` |
 
 ## Manual check before a release
 
@@ -45,6 +52,8 @@ This doc is the single source of pending work. GitHub issues are archived
 - [ ] Repeat with one battery absent, and with a charge threshold active.
 - [ ] Confirm repeated polls create no duplicate notification.
 - [ ] Confirm an unknown session shows current facts, not an invented delta.
+- [ ] After enough real use, confirm a full battery shows `≈ Usual` as active runtime.
+- [ ] Confirm suspend/gaps do not inflate `Usual`.
 
 For a screenshot, follow the capture steps in the screenshot backlog in
 `HANDOFF.md` (untracked; ask the maintainer if you don't have it).

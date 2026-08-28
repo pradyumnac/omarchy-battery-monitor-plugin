@@ -47,6 +47,474 @@ function writeBattery(root, name, values) {
   }
 }
 
+function writeHistory(state, rows) {
+  fs.writeFileSync(
+    path.join(state, "discharge-history.tsv"),
+    ["# battery-discharge-history\tv1", ...rows].join("\n") + "\n",
+  );
+}
+
+test("computes usual full runtime from seeded discharge history", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_now: 40000000,
+      energy_full: 50000000,
+    });
+    writeHistory(f.state, [
+      "1000\tsession-a\t10000\t50000000",
+      "1010\tsession-a\t9000\t50000000",
+      "1020\tsession-a\t11000\t50000000",
+      "1030\tsession-a\t10000\t50000000",
+      "1040\tsession-a\t12000\t50000000",
+      "1050\tsession-b\t10000\t50000000",
+      "1060\tsession-b\t9000\t50000000",
+      "1070\tsession-b\t11000\t50000000",
+      "1080\tsession-b\t10000\t50000000",
+      "1090\tsession-c\t12000\t50000000",
+      "1100\tsession-c\t10000\t50000000",
+      "1110\tsession-c\t9000\t50000000",
+    ]);
+
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "2000" });
+    assert.match(state, /^usual_full_runtime_seconds=18000$/m);
+    assert.match(state, /^usual_sample_count=12$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("records a 15-minute discharge window and updates usual runtime", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_now: 50000000,
+      energy_full: 50000000,
+    });
+    writeHistory(f.state, [
+      "1000\tsession-a\t10000\t50000000",
+      "1010\tsession-a\t9000\t50000000",
+      "1020\tsession-a\t11000\t50000000",
+      "1030\tsession-a\t10000\t50000000",
+      "1040\tsession-a\t12000\t50000000",
+      "1050\tsession-b\t10000\t50000000",
+      "1060\tsession-b\t9000\t50000000",
+      "1070\tsession-b\t11000\t50000000",
+      "1080\tsession-b\t10000\t50000000",
+      "1090\tsession-c\t12000\t50000000",
+      "1100\tsession-c\t10000\t50000000",
+    ]);
+
+    runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+    for (let timestamp = 1030; timestamp < 1900; timestamp += 30) {
+      runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
+    }
+    writeBattery(f.root, "BAT0", { energy_now: 47500000 });
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "1900" });
+    assert.match(state, /^usual_full_runtime_seconds=18000$/m);
+    assert.match(state, /^usual_sample_count=12$/m);
+    assert.match(
+      fs.readFileSync(path.join(f.state, "discharge-history.tsv"), "utf8"),
+      /1900\t[0-9]+\t10000\t50000000/,
+    );
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("retains only recent valid history rows and adjusts for current capacity", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_full: 40000000,
+    });
+    const rows = [
+      "4000000\told-session\t10000\t50000000",
+      ...Array.from({ length: 100 }, (_, index) => {
+        const session =
+          index % 3 === 0
+            ? "session-a"
+            : index % 3 === 1
+              ? "session-b"
+              : "session-c";
+        const draw = index === 99 ? 100000 : 10000;
+        return `${19990000 + index}\t${session}\t${draw}\t50000000`;
+      }),
+    ];
+    writeHistory(f.state, rows);
+
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "20000000" });
+    const history = fs
+      .readFileSync(path.join(f.state, "discharge-history.tsv"), "utf8")
+      .trim()
+      .split("\n");
+    assert.equal(history.length, 97);
+    assert.equal(history[0], "# battery-discharge-history\tv1");
+    assert.match(history[1], /^19990004\t/);
+    assert.doesNotMatch(history.join("\n"), /old-session/);
+    assert.match(state, /^usual_full_runtime_seconds=14400$/m);
+    assert.match(state, /^usual_sample_count=96$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("uses recent observations while retaining older back-reference data", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", { present: 1, energy_full: 50000000 });
+    const older = Array.from(
+      { length: 12 },
+      (_, index) => `${17000000 + index}\told-${index % 3}\t20000\t50000000`,
+    );
+    const recent = Array.from(
+      { length: 12 },
+      (_, index) => `${19990000 + index}\tnew-${index % 3}\t10000\t50000000`,
+    );
+    writeHistory(f.state, [...older, ...recent]);
+
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "20000000" });
+    const history = fs.readFileSync(
+      path.join(f.state, "discharge-history.tsv"),
+      "utf8",
+    );
+    assert.match(state, /^usual_full_runtime_seconds=18000$/m);
+    assert.match(state, /^usual_sample_count=12$/m);
+    assert.match(history, /17000000\told-0\t20000/);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("uses the median instead of an outlier for an odd sample set", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", { present: 1, energy_full: 50000000 });
+    writeHistory(f.state, [
+      "100\ta\t8000\t50000000",
+      "200\ta\t9000\t50000000",
+      "300\tb\t10000\t50000000",
+      "400\tb\t11000\t50000000",
+      "500\tc\t12000\t50000000",
+      "600\tc\t100000\t50000000",
+      "700\ta\t10000\t50000000",
+      "800\tb\t10000\t50000000",
+      "900\tc\t10000\t50000000",
+      "1000\ta\t10000\t50000000",
+      "1100\tb\t10000\t50000000",
+      "1200\tc\t10000\t50000000",
+      "1300\ta\t10000\t50000000",
+    ]);
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "2000" });
+    assert.match(state, /^usual_full_runtime_seconds=18000$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("resets a discharge window when energy increases", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_now: 50000000,
+      energy_full: 50000000,
+    });
+    runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+    writeBattery(f.root, "BAT0", { energy_now: 49000000 });
+    runTracker(f, { BATTERY_SESSION_NOW: "1030" });
+    writeBattery(f.root, "BAT0", { energy_now: 50000000 });
+    runTracker(f, { BATTERY_SESSION_NOW: "1060" });
+    writeBattery(f.root, "BAT0", { energy_now: 49000000 });
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "1090" });
+    assert.equal(
+      fs.existsSync(path.join(f.state, "discharge-history.tsv")),
+      false,
+    );
+    assert.match(state, /^window_start_epoch=1060$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("does not bridge a long polling gap into a discharge window", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_now: 50000000,
+      energy_full: 50000000,
+    });
+    runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+    writeBattery(f.root, "BAT0", { energy_now: 45000000 });
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "2000" });
+    assert.equal(
+      fs.existsSync(path.join(f.state, "discharge-history.tsv")),
+      false,
+    );
+    assert.match(state, /^window_start_epoch=2000$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("rejects an implausibly high discharge draw", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_now: 50000000,
+      energy_full: 50000000,
+    });
+    runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+    writeBattery(f.root, "BAT0", { energy_now: 10000000 });
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "1900" });
+    assert.equal(
+      fs.existsSync(path.join(f.state, "discharge-history.tsv")),
+      false,
+    );
+    assert.match(state, /^window_start_epoch=1900$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("resets sampling when energy data is missing or zero", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_full: 50000000,
+    });
+    runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+    writeBattery(f.root, "BAT0", { energy_now: 0 });
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "1030" });
+    assert.equal(
+      fs.existsSync(path.join(f.state, "discharge-history.tsv")),
+      false,
+    );
+    assert.match(state, /^window_start_epoch=0$/m);
+    assert.match(state, /^last_sample_energy_uwh=0$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("resets sampling when the clock moves backwards", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_now: 50000000,
+      energy_full: 50000000,
+    });
+    runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+    writeBattery(f.root, "BAT0", { energy_now: 49000000 });
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "900" });
+    assert.equal(
+      fs.existsSync(path.join(f.state, "discharge-history.tsv")),
+      false,
+    );
+    assert.match(state, /^window_start_epoch=900$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("aggregates compatible batteries into one discharge window", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_now: 50000000,
+      energy_full: 60000000,
+    });
+    writeBattery(f.root, "BAT1", {
+      present: 1,
+      status: "Discharging",
+      energy_now: 40000000,
+      energy_full: 40000000,
+    });
+    runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+    for (let timestamp = 1030; timestamp < 1900; timestamp += 30) {
+      runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
+    }
+    writeBattery(f.root, "BAT0", { energy_now: 47500000 });
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "1900" });
+    assert.match(state, /^window_start_energy_uwh=87500000$/m);
+    assert.match(
+      fs.readFileSync(path.join(f.state, "discharge-history.tsv"), "utf8"),
+      /1900\t[0-9]+\t10000\t100000000/,
+    );
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("invalidates only the active window when a battery is added", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_now: 50000000,
+      energy_full: 60000000,
+    });
+    runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+    writeBattery(f.root, "BAT1", {
+      present: 1,
+      status: "Discharging",
+      energy_now: 40000000,
+      energy_full: 40000000,
+    });
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "1030" });
+    assert.equal(
+      fs.existsSync(path.join(f.state, "discharge-history.tsv")),
+      false,
+    );
+    assert.match(state, /^window_start_epoch=1030$/m);
+    assert.match(state, /^window_start_energy_uwh=90000000$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("invalidates only the active window when a battery is removed", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_now: 50000000,
+      energy_full: 60000000,
+    });
+    writeBattery(f.root, "BAT1", {
+      present: 1,
+      status: "Discharging",
+      energy_now: 40000000,
+      energy_full: 40000000,
+    });
+    runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+    fs.rmSync(path.join(f.root, "BAT1"), { recursive: true });
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "1030" });
+    assert.equal(
+      fs.existsSync(path.join(f.state, "discharge-history.tsv")),
+      false,
+    );
+    assert.match(state, /^window_start_epoch=1030$/m);
+    assert.match(state, /^window_start_energy_uwh=50000000$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("rejects mixed battery energy measurement modes", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_now: 50000000,
+      energy_full: 60000000,
+    });
+    runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+    writeBattery(f.root, "BAT1", {
+      present: 1,
+      status: "Discharging",
+      charge_now: 4000000,
+      charge_full: 4000000,
+    });
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "1030" });
+    assert.match(state, /^window_start_epoch=0$/m);
+    assert.match(state, /^last_sample_energy_uwh=0$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("ignores unknown history schemas safely", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_full: 50000000,
+    });
+    fs.writeFileSync(
+      path.join(f.state, "discharge-history.tsv"),
+      [
+        "# battery-discharge-history\tv99",
+        "1000\ta\t10000\t50000000",
+        "1010\tb\t10000\t50000000",
+      ].join("\n") + "\n",
+    );
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "2000" });
+    assert.match(state, /^usual_full_runtime_seconds=0$/m);
+    assert.equal(
+      fs
+        .readFileSync(path.join(f.state, "discharge-history.tsv"), "utf8")
+        .split("\n")[0],
+      "# battery-discharge-history\tv99",
+    );
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("writes runtime state and history as user-only files", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      status: "Discharging",
+      energy_full: 50000000,
+    });
+    writeHistory(f.state, [
+      ...Array.from(
+        { length: 12 },
+        (_, index) =>
+          `${1000 + index}\\tsession-${index % 3}\\t10000\\t50000000`,
+      ),
+    ]);
+    runTracker(f, { BATTERY_SESSION_NOW: "2000" });
+    assert.equal(fs.statSync(path.join(f.state, "state")).mode & 0o777, 0o600);
+    assert.equal(
+      fs.statSync(path.join(f.state, "discharge-history.tsv")).mode & 0o777,
+      0o600,
+    );
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
 test("detects a non-AC-named mains supply", () => {
   const f = fixture();
   try {

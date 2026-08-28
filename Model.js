@@ -293,6 +293,12 @@ function formatSessionDuration(seconds) {
   return formatElapsed(totalMinutes * 60);
 }
 
+function formatRuntimeEstimate(seconds) {
+  var value = Number(seconds);
+  if (!(value > 0) || !Number.isFinite(value)) return "";
+  return formatElapsed(value);
+}
+
 if (typeof module === "object" && module !== null) {
   module.exports = {
     clampIndex: clampIndex,
@@ -317,6 +323,7 @@ if (typeof module === "object" && module !== null) {
     formatElapsed: formatElapsed,
     formatTimestamp: formatTimestamp,
     formatSessionDuration: formatSessionDuration,
+    formatRuntimeEstimate: formatRuntimeEstimate,
     parseChargeHistory: parseChargeHistory,
     parseUptime: parseUptime,
   };
