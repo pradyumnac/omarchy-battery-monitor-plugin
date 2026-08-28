@@ -66,8 +66,7 @@ Full install, uninstall, and troubleshooting steps:
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution process
-(includes `make check` / `make install` / `make uninstall`) and
-[CONTRIBUTORS.md](CONTRIBUTORS.md) for project credits.
+(includes `make check` / `make install` / `make uninstall`).
 
 ## License
 
