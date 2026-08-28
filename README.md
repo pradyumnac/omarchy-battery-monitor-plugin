@@ -22,10 +22,30 @@ picture at a glance, then inspect each physical battery when you need detail.
 - Hidden automatically on desktops with no laptop battery, and refused at
   install time on the same hardware
 
-Want the full picture? Read
-[charging session experience](docs/charging-session-experience.md) for the
-state machine behind every notification, the multi-battery rules, and the
-state file the tracker writes.
+### Per-battery detail
+
+![Panel detail: BAT0 and BAT1 side by side](screenshots/panel-detail.png)
+
+> Screenshot pending — see
+> [screenshot checklist](docs/dev/screenshot-checklist.md).
+
+### Session notifications
+
+<table>
+<tr><td>
+
+![Plugged notification](screenshots/notify-plugged.png)
+
+> Pending
+
+</td><td>
+
+![Unplugged notification](screenshots/notify-unplugged.png)
+
+> Pending
+
+</td></tr>
+</table>
 
 ## Install
 
@@ -35,62 +55,24 @@ cd omarchy-battery-monitor-plugin
 make install
 ```
 
-`make install` puts the widget in the bar itself — it rescans and enables the
-plugin in the running Omarchy shell, replacing the built-in `omarchy.power`
-widget, so no manual reload is needed. If the shell isn't running (no live
-session), restart it once you're in one:
+Full install, uninstall, and troubleshooting steps:
+[docs/user/install.md](docs/user/install.md).
 
-```sh
-omarchy restart shell
-```
+## Learn more
 
-Installation is repeatable and stays in your user account. `make install` runs
-a preflight check first and refuses to install on a machine with no laptop
-battery, or missing `upower` / `systemctl --user`. Run the check on its own,
-any time, with:
-
-```sh
-make doctor
-```
-
-## Uninstall
-
-```sh
-make uninstall
-```
-
-This disables the widget in the running Omarchy shell (restoring the built-in
-`omarchy.power` widget in its place), stops and removes the tracker service,
-deletes the installed plugin and tracker files from
-`~/.config/omarchy/plugins/doe.power`, and removes the session state. It
-undoes `make install` completely, leaving your Omarchy config exactly as it
-was before you installed.
-
-## Requirements
-
-- Omarchy with Quickshell
-- A laptop battery (`make doctor` verifies this)
-- UPower and `systemctl --user`
-- A Nerd Font available to the Omarchy shell
-
-## Repo map
-
-| Path | What's there |
+| Doc | For |
 | --- | --- |
-| `Panel.qml`, `Model.js`, `manifest.json` | The Omarchy bar widget |
-| `service/` | The tracker, the monitor, and their systemd units — installed and run long-term |
-| `scripts/` | `install`/`uninstall`/`preflight` — one-shot, run by `make` |
-| `tests/` | Node test suite (`make test`) |
-| `docs/` | [Charging session experience](docs/charging-session-experience.md): the state machine, rules, and state file |
+| [docs/user/install.md](docs/user/install.md) | Install, uninstall, troubleshooting |
+| [docs/user/notifications.md](docs/user/notifications.md) | What the panel and each notification mean |
+| [docs/dev/architecture.md](docs/dev/architecture.md) | The tracker/monitor state machine, for contributors |
+| [docs/dev/state-file-reference.md](docs/dev/state-file-reference.md) | State file field reference |
+| [docs/dev/requirements-spec.md](docs/dev/requirements-spec.md) | Test coverage, manual QA checklist, backlog |
 
 ## Contributing
 
-Run `make check` before submitting a change. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for testing guidance and
+See [AGENTS.md](AGENTS.md) for the repo map and operating constraints,
+[CONTRIBUTING.md](CONTRIBUTING.md) for the contribution process, and
 [CONTRIBUTORS.md](CONTRIBUTORS.md) for project credits.
-
-Runtime state stays under `~/.local/state/battery-session/` and is not tracked
-by Git.
 
 ## License
 
