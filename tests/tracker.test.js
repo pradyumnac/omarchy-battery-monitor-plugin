@@ -9,7 +9,7 @@ const tracker = path.join(
   __dirname,
   "..",
   "service",
-  "battery-session-tracker",
+  "battery-session-tracker.sh",
 );
 const testRoot = path.join(
   os.homedir(),

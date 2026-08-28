@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Remove everything install-session-tracker created: the running service,
+# Remove everything install-session-tracker.sh created: the running service,
 # its systemd units, the copied tracker files, and the recorded session
 # state. The machine is left as if the plugin had never been installed.
 # The operation is repeatable and never requires root access. Every path
@@ -54,7 +54,7 @@ systemctl --user disable --now \
   >/dev/null 2>&1 || true
 systemctl --user stop battery-session-tracker.service >/dev/null 2>&1 || true
 
-remove_path "$unit_dir/battery-session-tracker"
+remove_path "$unit_dir/battery-session-tracker.sh"
 remove_path "$unit_dir/battery-session-tracker.service"
 remove_path "$unit_dir/battery-session-tracker.timer"
 remove_path "$unit_dir/battery-session-monitor.service"

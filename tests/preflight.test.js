@@ -9,13 +9,13 @@ const preflight = path.join(
   __dirname,
   "..",
   "scripts",
-  "battery-session-preflight",
+  "battery-session-preflight.sh",
 );
 const installer = path.join(
   __dirname,
   "..",
   "scripts",
-  "install-session-tracker",
+  "install-session-tracker.sh",
 );
 const testRoot = path.join(
   os.homedir(),

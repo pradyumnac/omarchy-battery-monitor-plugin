@@ -5,7 +5,7 @@ set -euo pipefail
 
 power_supply_root="${POWER_SUPPLY_ROOT:-/sys/class/power_supply}"
 monitor_command="${BATTERY_SESSION_MONITOR_COMMAND:-upower}"
-tracker_command="${BATTERY_SESSION_TRACKER_COMMAND:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/battery-session-tracker}"
+tracker_command="${BATTERY_SESSION_TRACKER_COMMAND:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/battery-session-tracker.sh}"
 # How long to wait for UPower's battery-state event after AC comes online
 # before giving up and reporting whatever the battery status actually is
 # (a battery already above its charge threshold never reports "Charging").

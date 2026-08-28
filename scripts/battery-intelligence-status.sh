@@ -16,6 +16,28 @@ value() {
   awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$file"
 }
 
+format_duration() {
+  local seconds=$1 minutes hours
+  minutes=$(((seconds + 59) / 60))
+  hours=$((minutes / 60))
+  minutes=$((minutes % 60))
+  if ((hours > 0 && minutes > 0)); then
+    printf '%dh %dm' "$hours" "$minutes"
+  elif ((hours > 0)); then
+    printf '%dh' "$hours"
+  else
+    printf '%dm' "$minutes"
+  fi
+}
+
+format_energy() {
+  awk -v value="$1" 'BEGIN { printf "%.1f Wh", value / 1000000 }'
+}
+
+format_power() {
+  awk -v value="$1" 'BEGIN { printf "%.1f W", value / 1000 }'
+}
+
 service_state() {
   local unit=$1
   if command -v -- "$systemctl_command" >/dev/null 2>&1 \
@@ -46,7 +68,7 @@ fingerprint=$(value battery_fingerprint "$state_file")
 
 if [[ "$usual" =~ ^[1-9][0-9]*$ ]]; then
   printf '  Workflow: model ready\n'
-  printf '  Usual full runtime: %ss\n' "$usual"
+  printf '  Usual full runtime: %s\n' "$(format_duration "$usual")"
 else
   printf '  Workflow: learning\n'
   printf '  Usual full runtime: not ready\n'
@@ -58,7 +80,7 @@ if [[ "$window_start" =~ ^[1-9][0-9]*$ && "$now" =~ ^[0-9]+$ ]]; then
   if ((elapsed >= 0)); then
     progress=$((elapsed * 100 / (15 * 60)))
     ((progress > 100)) && progress=100
-    printf '  Active window: %s%% (%ss/900s)\n' "$progress" "$elapsed"
+    printf '  Active window: %s%% (%s / 15m)\n' "$progress" "$(format_duration "$elapsed")"
   else
     printf '  Active window: reset (clock moved backwards)\n'
   fi
@@ -67,9 +89,17 @@ else
 fi
 
 printf '  Discharge session: %s\n' "${session:-none}"
-printf '  Window start energy: %s uWh\n' "${window_energy:-none}"
-printf '  Last sample energy: %s uWh\n' "${last_energy:-none}"
-printf '  Battery set: %s\n' "${fingerprint:-unknown}"
+if [[ "$window_energy" =~ ^[1-9][0-9]*$ ]]; then
+  printf '  Window start energy: %s\n' "$(format_energy "$window_energy")"
+else
+  printf '  Window start energy: none\n'
+fi
+if [[ "$last_energy" =~ ^[1-9][0-9]*$ ]]; then
+  printf '  Last sample energy: %s\n' "$(format_energy "$last_energy")"
+else
+  printf '  Last sample energy: none\n'
+fi
+printf '  Battery set: %s\n' "${fingerprint//\\,/, }"
 
 if [[ -f "$history_file" ]]; then
   history_stats=$(awk -F '\t' -v now="$now" '
@@ -84,7 +114,14 @@ if [[ -f "$history_file" ]]; then
   ' "$history_file")
   IFS=$'\t' read -r total recent sessions last_row <<< "$history_stats"
   printf '  History: %s valid rows (%s recent / %s sessions)\n' "$total" "$recent" "$sessions"
-  printf '  Last recorded window: %s\n' "${last_row:-none}"
+  if [[ -n "${last_row:-}" ]]; then
+    IFS=$'\t' read -r last_epoch _last_session last_draw last_capacity <<< "$last_row"
+    printf '  Last recorded window: %s at %s (%s draw, %s capacity)\n' \
+      "$(format_duration $((15 * 60)))" "$last_epoch" \
+      "$(format_power "$last_draw")" "$(format_energy "$last_capacity")"
+  else
+    printf '  Last recorded window: none\n'
+  fi
 else
   printf '  History: no observations recorded\n'
 fi

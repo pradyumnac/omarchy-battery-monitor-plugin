@@ -18,6 +18,16 @@ make install
 `make install` replaces the built-in `omarchy.power` widget with this plugin
 in the running Omarchy shell. No manual reload is needed.
 
+Track the learning workflow and see what has been recorded with:
+
+```sh
+make intelligence-status
+```
+
+It reports service health, active-window progress, model readiness, and the
+local history used for the `≈ Usual` runtime estimate. Runtime data is kept in
+`~/.local/state/battery-session/` and never sent over the network.
+
 If no shell session is running yet, start one:
 
 ```sh

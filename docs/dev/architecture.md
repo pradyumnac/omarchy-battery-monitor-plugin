@@ -58,10 +58,10 @@ adapts to battery health and recent usage.
 
 | Script | Runs | Job |
 | --- | --- | --- |
-| `battery-session-tracker` | Every 30s, and once per power event | Reads sysfs, updates the state file. Notifies only when called with `--power-event`. |
-| `battery-session-monitor` | Continuously, as a systemd service | Watches `upower --monitor`, decides when a transition is real, calls the tracker with `--power-event`. |
+| `battery-session-tracker.sh` | Every 30s, and once per power event | Reads sysfs, updates the state file. Notifies only when called with `--power-event`. |
+| `battery-session-monitor.sh` | Continuously, as a systemd service | Watches `upower --monitor`, decides when a transition is real, calls the tracker with `--power-event`. |
 
-Only `battery-session-monitor` passes `--power-event`. A notification
+Only `battery-session-monitor.sh` passes `--power-event`. A notification
 always traces back to a real UPower event, never to the poll. See the
 [state file reference](state-file-reference.md) for field-level detail.
 

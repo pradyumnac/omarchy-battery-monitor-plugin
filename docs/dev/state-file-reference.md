@@ -8,7 +8,7 @@ Audience: contributors reading or writing tracker state.
 ${XDG_STATE_HOME:-$HOME/.local/state}/battery-session/state
 ```
 
-`battery-session-tracker` writes it. `battery-session-monitor` triggers a
+`battery-session-tracker.sh` writes it. `battery-session-monitor.sh` triggers a
 write on power events. The panel reads it every refresh.
 
 ## Fields

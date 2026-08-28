@@ -7,13 +7,13 @@ const tracker = path.join(
   __dirname,
   "..",
   "service",
-  "battery-session-tracker",
+  "battery-session-tracker.sh",
 );
 const installer = path.join(
   __dirname,
   "..",
   "scripts",
-  "install-session-tracker",
+  "install-session-tracker.sh",
 );
 
 test("tracker rejects a state path outside the user home", () => {

@@ -6,7 +6,7 @@ export PLUGIN_DIR
 
 # Syntax and lint checks only. Run `make test` separately for the test suite.
 check:
-	bash -n service/battery-session-tracker service/battery-session-monitor service/power-supply.sh scripts/battery-session-preflight scripts/install-session-tracker scripts/uninstall-session-tracker scripts/battery-intelligence-status
+	bash -n service/battery-session-tracker.sh service/battery-session-monitor.sh service/power-supply.sh scripts/battery-session-preflight.sh scripts/install-session-tracker.sh scripts/uninstall-session-tracker.sh scripts/battery-intelligence-status.sh
 	# Service executables exist only after `make install`; verify the static timer here.
 	systemd-analyze verify service/battery-session-tracker.timer
 	# shellcheck disable=SC1036,SC1088
@@ -33,7 +33,7 @@ test:
 # Install the plugin and its user-level tracker, then reload the running
 # Omarchy shell so it picks up the installed panel and tracker.
 install:
-	scripts/install-session-tracker
+	scripts/install-session-tracker.sh
 	@$(MAKE) --no-print-directory reload
 
 # Undo `make install`: stop and remove the service, the installed plugin and
@@ -41,7 +41,7 @@ install:
 # Omarchy shell so the panel disappears. The machine is left as if the
 # plugin had never been installed.
 uninstall:
-	scripts/uninstall-session-tracker
+	scripts/uninstall-session-tracker.sh
 	@$(MAKE) --no-print-directory reload
 
 # Ask the running Omarchy shell to rescan and reload plugins in place, so it
@@ -60,11 +60,11 @@ status:
 
 # Show service health, recorded observations, and model learning progress.
 intelligence-status:
-	scripts/battery-intelligence-status
+	scripts/battery-intelligence-status.sh
 
 # Check this machine is ready to install, without installing anything.
 preflight:
-	scripts/battery-session-preflight
+	scripts/battery-session-preflight.sh
 
 # Alias for `make preflight`.
 doctor: preflight

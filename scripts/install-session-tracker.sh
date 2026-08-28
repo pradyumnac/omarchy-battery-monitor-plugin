@@ -13,7 +13,7 @@ scripts_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source_dir="$(dirname "$scripts_source")"
 service_source="$source_dir/service"
 
-"$scripts_source/battery-session-preflight"
+"$scripts_source/battery-session-preflight.sh"
 
 account_home=$(getent passwd "$(id -u)" | cut -d: -f6)
 [[ -n $account_home ]] || {
@@ -48,9 +48,9 @@ if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
 
   # Lifecycle scripts: run once, by hand or by make.
   admin_files=(
-    battery-session-preflight
-    install-session-tracker
-    uninstall-session-tracker
+    battery-session-preflight.sh
+    install-session-tracker.sh
+    uninstall-session-tracker.sh
   )
   for name in "${admin_files[@]}"; do
     cp -a -- "$source_dir/scripts/$name" "$plugin_dir/scripts/"
@@ -59,10 +59,10 @@ if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
 
   # Service: the long-running tracker and monitor, plus their units.
   service_files=(
-    battery-session-tracker
+    battery-session-tracker.sh
     battery-session-tracker.service
     battery-session-tracker.timer
-    battery-session-monitor
+    battery-session-monitor.sh
     battery-session-monitor.service
     power-supply.sh
   )
@@ -70,15 +70,15 @@ if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
     cp -a -- "$source_dir/service/$name" "$plugin_dir/service/"
     log_write "$plugin_dir/service/$name"
   done
-  chmod +x "$plugin_dir/scripts/battery-session-preflight" \
-    "$plugin_dir/scripts/install-session-tracker" \
-    "$plugin_dir/scripts/uninstall-session-tracker" \
-    "$plugin_dir/service/battery-session-tracker" \
-    "$plugin_dir/service/battery-session-monitor"
+  chmod +x "$plugin_dir/scripts/battery-session-preflight.sh" \
+    "$plugin_dir/scripts/install-session-tracker.sh" \
+    "$plugin_dir/scripts/uninstall-session-tracker.sh" \
+    "$plugin_dir/service/battery-session-tracker.sh" \
+    "$plugin_dir/service/battery-session-monitor.sh"
 fi
 
-ln -sfn "$plugin_dir/service/battery-session-tracker" "$unit_dir/battery-session-tracker"
-log_write "$unit_dir/battery-session-tracker (symlink)"
+ln -sfn "$plugin_dir/service/battery-session-tracker.sh" "$unit_dir/battery-session-tracker.sh"
+log_write "$unit_dir/battery-session-tracker.sh (symlink)"
 
 # A unit cannot expand PLUGIN_DIR, so write each resolved executable path into
 # its user service. Unit quoting keeps spaces and special characters intact.
@@ -102,8 +102,8 @@ write_service_unit() {
   log_write "$output"
 }
 
-tracker_exec=$(escape_unit_exec "$plugin_dir/service/battery-session-tracker")
-monitor_exec=$(escape_unit_exec "$plugin_dir/service/battery-session-monitor")
+tracker_exec=$(escape_unit_exec "$plugin_dir/service/battery-session-tracker.sh")
+monitor_exec=$(escape_unit_exec "$plugin_dir/service/battery-session-monitor.sh")
 write_service_unit "$service_source/battery-session-tracker.service" \
   "$unit_dir/battery-session-tracker.service" "$tracker_exec" " --once"
 write_service_unit "$service_source/battery-session-monitor.service" \

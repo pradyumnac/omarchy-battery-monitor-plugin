@@ -9,7 +9,7 @@ const statusScript = path.join(
   __dirname,
   "..",
   "scripts",
-  "battery-intelligence-status",
+  "battery-intelligence-status.sh",
 );
 const testRoot = path.join(
   os.homedir(),
@@ -60,17 +60,25 @@ test("reports model readiness, active window, and recorded history", () => {
     assert.match(result.stdout, /Monitor: active/);
     assert.match(result.stdout, /Poller: active/);
     assert.match(result.stdout, /Workflow: model ready/);
-    assert.match(result.stdout, /Usual full runtime: 18000s/);
-    assert.match(result.stdout, /Active window: 50% \(450s\/900s\)/);
-    assert.match(result.stdout, /History: 2 valid rows \(2 recent \/ 2 sessions\)/);
-    assert.match(result.stdout, /Last recorded window: 19999910\tsession-b/);
+    assert.match(result.stdout, /Usual full runtime: 5h/);
+    assert.match(result.stdout, /Active window: 50% \(8m \/ 15m\)/);
+    assert.match(
+      result.stdout,
+      /History: 2 valid rows \(2 recent \/ 2 sessions\)/,
+    );
+    assert.match(
+      result.stdout,
+      /Last recorded window: 15m at 19999910 \(11.0 W draw, 50.0 Wh capacity\)/,
+    );
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
 
 test("reports learning state before any observations", () => {
-  const stateDir = fs.mkdtempSync(path.join(testRoot, "intelligence-status-empty-"));
+  const stateDir = fs.mkdtempSync(
+    path.join(testRoot, "intelligence-status-empty-"),
+  );
   try {
     const result = runStatus(stateDir);
     assert.equal(result.status, 0);

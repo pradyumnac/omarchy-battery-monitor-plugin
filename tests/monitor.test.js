@@ -9,7 +9,7 @@ const monitor = path.join(
   __dirname,
   "..",
   "service",
-  "battery-session-monitor",
+  "battery-session-monitor.sh",
 );
 const testRoot = path.join(
   os.homedir(),
