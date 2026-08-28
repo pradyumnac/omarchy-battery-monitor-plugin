@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # Install the user-level battery session tracker and its systemd timer.
-# The operation is repeatable and never requires root access.
+# The operation is repeatable and never requires root access. Every path
+# written is printed as it happens.
 
 set -euo pipefail
+
+log_write() {
+  printf 'install: wrote %s\n' "$1"
+}
 
 tracker_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source_dir="$(dirname "$tracker_source")"
@@ -27,27 +32,42 @@ for write_dir in "$plugin_dir" "$unit_dir"; do
   esac
 done
 mkdir -p "$plugin_dir" "$plugin_dir/tracker" "$unit_dir"
+log_write "$plugin_dir/"
+log_write "$plugin_dir/tracker/"
 
 # Copy a standalone checkout into the standard Omarchy plugin location. If
 # the checkout is already installed there, avoid copying files onto itself.
 if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
-  cp -a -- "$source_dir/Panel.qml" "$source_dir/Model.js" "$source_dir/manifest.json" \
-    "$source_dir/README.md" "$source_dir/LICENSE" "$source_dir/AGENTS.md" "$plugin_dir/"
-  cp -a -- "$source_dir/tracker/battery-session-tracker" \
-    "$source_dir/tracker/battery-session-tracker.service" \
-    "$source_dir/tracker/battery-session-tracker.timer" \
-    "$source_dir/tracker/battery-session-monitor" \
-    "$source_dir/tracker/battery-session-monitor.service" \
-    "$source_dir/tracker/power-supply.sh" \
-    "$source_dir/tracker/battery-session-preflight" \
-    "$source_dir/tracker/install-session-tracker" "$plugin_dir/tracker/"
+  plugin_files=(Panel.qml Model.js manifest.json README.md LICENSE AGENTS.md)
+  for name in "${plugin_files[@]}"; do
+    cp -a -- "$source_dir/$name" "$plugin_dir/"
+    log_write "$plugin_dir/$name"
+  done
+
+  tracker_files=(
+    battery-session-tracker
+    battery-session-tracker.service
+    battery-session-tracker.timer
+    battery-session-monitor
+    battery-session-monitor.service
+    power-supply.sh
+    battery-session-preflight
+    install-session-tracker
+    uninstall-session-tracker
+  )
+  for name in "${tracker_files[@]}"; do
+    cp -a -- "$source_dir/tracker/$name" "$plugin_dir/tracker/"
+    log_write "$plugin_dir/tracker/$name"
+  done
   chmod +x "$plugin_dir/tracker/battery-session-tracker" \
     "$plugin_dir/tracker/battery-session-monitor" \
     "$plugin_dir/tracker/battery-session-preflight" \
-    "$plugin_dir/tracker/install-session-tracker"
+    "$plugin_dir/tracker/install-session-tracker" \
+    "$plugin_dir/tracker/uninstall-session-tracker"
 fi
 
 ln -sfn "$plugin_dir/tracker/battery-session-tracker" "$unit_dir/battery-session-tracker"
+log_write "$unit_dir/battery-session-tracker (symlink)"
 
 # A unit cannot expand PLUGIN_DIR, so write each resolved executable path into
 # its user service. Unit quoting keeps spaces and special characters intact.
@@ -68,6 +88,7 @@ write_service_unit() {
       printf '%s\n' "$line"
     fi
   done < "$template" > "$output"
+  log_write "$output"
 }
 
 tracker_exec=$(escape_unit_exec "$plugin_dir/tracker/battery-session-tracker")
@@ -77,6 +98,7 @@ write_service_unit "$tracker_source/battery-session-tracker.service" \
 write_service_unit "$tracker_source/battery-session-monitor.service" \
   "$unit_dir/battery-session-monitor.service" "$monitor_exec" ""
 ln -sfn "$plugin_dir/tracker/battery-session-tracker.timer" "$unit_dir/battery-session-tracker.timer"
+log_write "$unit_dir/battery-session-tracker.timer (symlink)"
 
 systemctl --user daemon-reload
 systemctl --user enable --now battery-session-tracker.timer battery-session-monitor.service
