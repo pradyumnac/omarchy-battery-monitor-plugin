@@ -288,8 +288,10 @@ function parseUptime(raw) {
   return Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
-function formatSessionDuration(seconds) {
-  var totalMinutes = Math.max(1, Math.ceil(Number(seconds || 0) / 60));
+function formatSessionDuration(seconds, atLeast) {
+  var value = Number(seconds || 0);
+  if (atLeast) return "> " + formatElapsed(Math.max(0, value));
+  var totalMinutes = Math.max(1, Math.ceil(value / 60));
   return formatElapsed(totalMinutes * 60);
 }
 

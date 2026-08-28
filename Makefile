@@ -1,5 +1,5 @@
 # shellcheck disable=all
-.PHONY: check test install uninstall reload status intelligence-status preflight doctor
+.PHONY: check test install uninstall uninstall-purge-data reload status intelligence-status preflight doctor
 
 PLUGIN_DIR ?= $(HOME)/.config/omarchy/plugins/doe.power
 export PLUGIN_DIR
@@ -36,11 +36,16 @@ install:
 	scripts/install-session-tracker.sh
 	@$(MAKE) --no-print-directory reload
 
-# Undo `make install`: stop and remove the service, the installed plugin and
-# tracker files, and the recorded session state, then reload the running
-# Omarchy shell so the panel disappears. The machine is left as if the
-# plugin had never been installed.
+# Undo `make install`: stop and remove the service and installed plugin files,
+# retain recorded session/intelligence data for a later reinstall, then reload
+# the running Omarchy shell so the panel disappears.
 uninstall:
+	scripts/uninstall-session-tracker.sh --keep-data
+	@$(MAKE) --no-print-directory reload
+
+# Perform a complete uninstall, including all recorded session state,
+# discharge history, and intelligence metrics.
+uninstall-purge-data:
 	scripts/uninstall-session-tracker.sh
 	@$(MAKE) --no-print-directory reload
 

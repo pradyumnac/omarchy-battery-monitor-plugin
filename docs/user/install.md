@@ -52,17 +52,31 @@ make doctor
 
 ## Uninstall
 
+To remove the plugin but retain all locally collected data for a later
+reinstall:
+
 ```sh
 make uninstall
 ```
 
-This reverses `make install` completely:
+This command:
 
 - Restores the built-in `omarchy.power` widget.
 - Stops and removes the tracker service.
 - Deletes the plugin and tracker files from
   `~/.config/omarchy/plugins/doe.power`.
-- Removes the session state.
+- Keeps the complete `~/.local/state/battery-session/` directory, including
+  current session state, discharge history, and learned intelligence metrics.
+
+To remove the plugin **and permanently purge all collected data**:
+
+```sh
+make uninstall-purge-data
+```
+
+The purge target removes the entire battery-session state directory. Reinstalling
+after a normal `make uninstall` resumes with the retained history; reinstalling
+after `make uninstall-purge-data` starts learning from scratch.
 
 ## Troubleshooting
 

@@ -26,7 +26,10 @@ Panel {
       start = start || Number(root.chargeHistory.chargeStartEpoch || 0)
     }
     if (!(start > 0)) return "—"
-    return Model.formatSessionDuration(root.nowEpochSeconds - start)
+    return Model.formatSessionDuration(
+      root.nowEpochSeconds - start,
+      root.chargeHistory.stateStartAtLeast
+    )
   }
   readonly property var laptopBatteries: Model.getLaptopBatteries(UPower.devices)
   // UPower can expose a display device on desktops too (for example AC power
@@ -192,6 +195,7 @@ Panel {
     if (Object.keys(next).length === 0) return
     chargeHistory = {
       stateStartEpoch: Number(next.state_since || 0),
+      stateStartAtLeast: Number(next.state_since_at_least || 0) === 1,
       chargeStartEpoch: Number(next.last_charge_start || 0),
       chargeEndEpoch: Number(next.last_charge_end || 0),
       usualFullRuntimeSeconds: Number(next.usual_full_runtime_seconds || 0),

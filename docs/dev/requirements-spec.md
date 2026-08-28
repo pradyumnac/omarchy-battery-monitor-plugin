@@ -14,7 +14,10 @@ This doc is the single source of pending work. GitHub issues are archived
 | Battery-to-charge transition | `tests/tracker.test.js` |
 | Charge-to-battery transition | `tests/tracker.test.js` |
 | Reconnect clears `last_charge_end` | `tests/tracker.test.js` |
-| Same-state gap over 90 seconds | `tests/tracker.test.js` |
+| Same-state gap over 90 seconds starts a lower-bound session | `tests/tracker.test.js` |
+| Initial or recovered unknown session start sets `state_since_at_least=1` | `tests/tracker.test.js` |
+| Real power transition clears `state_since_at_least` | `tests/tracker.test.js` |
+| Lower-bound duration renders as `> X`, rounded down | `tests/model.test.js` |
 | Desktop with no battery creates no session | `tests/tracker.test.js` |
 | Two-battery aggregation | `tests/model.test.js` |
 | Charge-threshold detection | `tests/model.test.js` |
@@ -31,6 +34,9 @@ This doc is the single source of pending work. GitHub issues are archived
 | Held battery reported in the `⚠ Charge threshold:` block | `tests/tracker.test.js` |
 | Battery with no `present` file is still tracked | `tests/tracker.test.js`, `tests/preflight.test.js` |
 | Every file write stays under the user's home directory | `tests/write-boundary.test.js` |
+| Normal uninstall retains all session and intelligence data | `tests/uninstall.test.js` |
+| Purge uninstall removes the complete data directory | `tests/uninstall.test.js` |
+| Unknown uninstall options fail before removing files | `tests/uninstall.test.js` |
 | Install refuses on a machine with no battery | `tests/preflight.test.js` |
 | Seeded history produces a current-capacity `Usual` runtime | `tests/tracker.test.js` |
 | A valid 15-minute discharge window is recorded | `tests/tracker.test.js` |
@@ -49,11 +55,17 @@ This doc is the single source of pending work. GitHub issues are archived
 - [ ] Confirm `Unplugged` shows the approximate duration.
 - [ ] Confirm each battery has one start-to-end row and no added gain.
 - [ ] Confirm the panel shows one `Plugged` or `Unplugged` field, not two.
+- [ ] Restart tracking while already unplugged and confirm the panel shows
+      `> X`, meaning at least X, rather than an exact-looking duration.
+- [ ] Complete a real plug/unplug transition and confirm `>` disappears.
 - [ ] Repeat with one battery absent, and with a charge threshold active.
 - [ ] Confirm repeated polls create no duplicate notification.
 - [ ] Confirm an unknown session shows current facts, not an invented delta.
 - [ ] After enough real use, confirm a full battery shows `≈ Usual` as active runtime.
 - [ ] Confirm suspend/gaps do not inflate `Usual`.
+- [ ] Run `make uninstall`, reinstall, and confirm history is retained.
+- [ ] Run `make uninstall-purge-data` only on disposable test data and confirm
+      the battery-session state directory is removed.
 
 For a screenshot, follow the capture steps in the screenshot backlog in
 `HANDOFF.md` (untracked; ask the maintainer if you don't have it).
@@ -70,8 +82,8 @@ session"?
 
 | Case | Question | Notes |
 | --- | --- | --- |
-| Suspend / resume | Does `state_since` stay correct across a suspend that spans a mains change? | See [architecture](architecture.md#open-edge-cases) |
-| Shutdown / poweroff mid-session | Does the state file need a flush-on-shutdown path, or is stale-up-to-30s acceptable on next boot? | No flush path exists today |
+| Suspend / resume | Can a mains change and reversal entirely inside suspend be detected? | A gap produces `> X`, but hidden transitions cannot be reconstructed; see [architecture](architecture.md#open-edge-cases) |
+| Shutdown / poweroff mid-session | Does the state file need a flush-on-shutdown path to recover transitions while stopped? | Restart produces `> X`; no flush path exists today |
 | Last battery removed at runtime | Beyond the mid-session `removed` row, does the panel degrade gracefully to hidden if the battery never comes back? | Install-time preflight already refuses on zero-battery machines; this is the runtime case |
 | Real-hardware verification | Confirm timing (settle time, notification text) on laptops other than the T480 | Was tracked as issue #4; see below |
 

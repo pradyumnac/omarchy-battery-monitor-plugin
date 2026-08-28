@@ -74,5 +74,20 @@ still gets a row — equal start and end values already say "no change."
 | Battery added mid-session | Not in the connect snapshot | Row reads `added`, with its level |
 | No laptop battery | No notification | Panel stays hidden |
 
-For the mechanics behind this — the state machine, timing, and the state
-file — see [architecture](../dev/architecture.md).
+## Panel session duration
+
+The panel distinguishes an observed transition from a session that was
+already underway when tracking became reliable:
+
+| Display | Meaning |
+| --- | --- |
+| `5m` | The tracker observed the plug or unplug transition five minutes ago |
+| `> 5m` | **At least five minutes**; the actual session started earlier, but its transition time is unknown |
+
+The `>` form appears when the tracker first starts while already plugged or
+unplugged, resumes the same state after a polling gap over 90 seconds or a
+clock reversal, or recovers an older state file with no session timestamp. It
+disappears after the next real plug or unplug transition.
+
+For the mechanics behind this — the state machine, timing, and state file —
+see [architecture](../dev/architecture.md).

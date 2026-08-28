@@ -91,6 +91,12 @@ test("parseChargeHistory drops entries after the given now", () => {
   );
 });
 
+test("formats exact and lower-bound session durations", () => {
+  assert.equal(Model.formatSessionDuration(5 * 60 + 20, false), "6m");
+  assert.equal(Model.formatSessionDuration(5 * 60 + 20, true), "> 5m");
+  assert.equal(Model.formatSessionDuration(20, true), "> 0m");
+});
+
 test("formats a usual full-runtime estimate", () => {
   assert.equal(Model.formatRuntimeEstimate(5 * 60 * 60 + 20 * 60), "5h 20m");
   assert.equal(Model.formatRuntimeEstimate(0), "");

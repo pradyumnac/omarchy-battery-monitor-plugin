@@ -16,7 +16,8 @@ write on power events. The panel reads it every refresh.
 | Field | Meaning | Used for |
 | --- | --- | --- |
 | `previous_state` | Last observed state: `on-charge` or `on-battery` | Chooses the `Plugged` or `Unplugged` panel label |
-| `state_since` | Start of the current observed state, or `0` | Panel's session duration |
+| `state_since` | Exact transition time, or the first reliable observation when the transition time is unknown | Panel's session duration |
+| `state_since_at_least` | `1` when `state_since` is only a lower-bound observation; otherwise `0` | Prefixes the panel duration with `>` |
 | `last_charge_start` | Last observed battery-to-charge transition | Fallback source for `Plugged` duration |
 | `last_charge_end` | Last observed charge-to-battery transition, or `0` | Marks the session end; not shown separately |
 | `last_observed` | Time of the last successful poll | Detects a clock reversal or a gap over 90s |
@@ -29,6 +30,23 @@ write on power events. The panel reads it every refresh.
 | `window_start_energy_uwh` | Aggregate energy at the active window start | Builds a discharge observation |
 | `last_sample_energy_uwh` | Aggregate energy at the previous poll | Detects energy increases |
 | `battery_fingerprint` | Names, measurement mode, and capacity of present batteries | Invalidates a window after topology changes |
+
+## Session-duration confidence
+
+The panel renders `> X` as **at least X**. The tracker uses the following
+state matrix:
+
+| Preconditions | Stored timestamp | `state_since_at_least` | Panel meaning |
+| --- | --- | --- | --- |
+| A real charge-to-battery or battery-to-charge transition is observed | Transition time | `0` | `X` is the observed session duration |
+| The tracker starts with no previous power state | First observation time | `1` | `> X` because the session began no later than that observation |
+| The same power state is observed after a gap over 90 seconds or a clock reversal | First reliable observation after the gap | `1` | `> X`; activity during the gap is unknown |
+| An older state file has a current state but `state_since=0` or invalid | Recovery observation time | `1` | `> X`; the original transition time is unavailable |
+| A later real power transition occurs | New transition time | `0` | Confidence resets and the `>` prefix disappears |
+
+The lower bound is rounded down to whole minutes, so `> 5m` never claims
+more observed time than the tracker has measured. Exact durations retain the
+normal session-duration rounding.
 
 ## Discharge history
 
@@ -50,10 +68,11 @@ to recent usage while retaining a limited longer back-reference.
   number, model ID, or other host-identifying data.
 - Every state and history write is atomic: write to a temp file, then rename.
 - Every write is user-only (`umask 077`).
-- A gap over 90s in the same observed state clears `state_since` — the
-  panel shows `—` rather than an invented duration. See
-  [architecture](architecture.md#open-edge-cases) for gaps longer than a
-  normal poll interval (suspend, shutdown).
+- A gap over 90s in the same observed state starts a lower-bound observed
+  session. The panel prefixes its duration with `>` rather than claiming to
+  know what happened while the service was inactive. See
+  [architecture](architecture.md#open-edge-cases) for suspend and shutdown
+  cases that can also hide a power-state change.
 
 ## Reading it directly
 

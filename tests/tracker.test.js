@@ -528,6 +528,42 @@ test("detects a non-AC-named mains supply", () => {
   }
 });
 
+test("starts an observed session when the initial state is already on battery", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", { present: 1, status: "Discharging" });
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "1234" });
+    assert.match(state, /^previous_state=on-battery$/m);
+    assert.match(state, /^state_since=1234$/m);
+    assert.match(state, /^state_since_at_least=1$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("recovers a missing timestamp in an existing battery session", () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(
+      path.join(f.state, "state"),
+      [
+        "previous_state=on-battery",
+        "state_since=0",
+        "last_observed=1200",
+        "",
+      ].join("\n"),
+    );
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "1230" });
+    assert.match(state, /^previous_state=on-battery$/m);
+    assert.match(state, /^state_since=1230$/m);
+    assert.match(state, /^state_since_at_least=1$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
 test("records an observed battery-to-charge transition", () => {
   const f = fixture();
   try {
@@ -538,6 +574,7 @@ test("records an observed battery-to-charge transition", () => {
     const state = runTracker(f);
     assert.match(state, /^previous_state=on-charge$/m);
     assert.match(state, /^state_since=[1-9][0-9]*$/m);
+    assert.match(state, /^state_since_at_least=0$/m);
     assert.match(state, /^last_charge_start=[1-9][0-9]*$/m);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
@@ -913,7 +950,7 @@ test("records charger removal as the end of charging", () => {
   }
 });
 
-test("does not continue a session after a long observation gap", () => {
+test("starts a new observed session after a long observation gap", () => {
   const f = fixture();
   try {
     fs.writeFileSync(
@@ -927,9 +964,10 @@ test("does not continue a session after a long observation gap", () => {
         "",
       ].join("\n"),
     );
-    const state = runTracker(f);
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "1000" });
     assert.match(state, /^previous_state=on-battery$/m);
-    assert.match(state, /^state_since=0$/m);
+    assert.match(state, /^state_since=1000$/m);
+    assert.match(state, /^state_since_at_least=1$/m);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
     fs.rmSync(f.state, { recursive: true, force: true });

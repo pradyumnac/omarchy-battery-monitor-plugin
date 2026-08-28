@@ -135,8 +135,8 @@ capture_battery_capacity() {
 }
 
 history_schema_valid() {
-  [[ -f "$state_dir/discharge-history.tsv" ]] \
-    && [[ "$(head -n 1 "$state_dir/discharge-history.tsv" 2>/dev/null)" == $'# battery-discharge-history\tv1' ]]
+  [[ -f "$state_dir/discharge-history.tsv" ]] &&
+    [[ "$(head -n 1 "$state_dir/discharge-history.tsv" 2>/dev/null)" == $'# battery-discharge-history\tv1' ]]
 }
 
 prune_history() {
@@ -152,7 +152,7 @@ prune_history() {
     awk -F '\t' -v cutoff="$cutoff" \
       '$1 ~ /^[0-9]+$/ && $1 >= cutoff && $2 != "" && $3 ~ /^[1-9][0-9]*$/ && $4 ~ /^[1-9][0-9]*$/ { print }' \
       "$history_file" | sort -n -k1,1 | tail -n 96
-  } > "$tmp_file"
+  } >"$tmp_file"
   mv -f -- "$tmp_file" "$history_file"
 }
 
@@ -192,7 +192,7 @@ compute_usual_runtime() {
   fi
   ((median > 0)) || return 0
   # capacity is µWh and draw is mW; divide by 1000 to convert milli-hours.
-  usual_full_runtime_seconds=$(( (current_capacity * 3600 + median * 500) / (median * 1000) ))
+  usual_full_runtime_seconds=$(((current_capacity * 3600 + median * 500) / (median * 1000)))
   usual_sample_count=$draw_count
 }
 
@@ -254,7 +254,7 @@ send_unplug_notification() {
   local -a entries=() rows=() start_names=() end_names=()
   local -A starts=() ends=() seen=()
 
-  IFS=',' read -r -a entries <<< "$charge_start_levels"
+  IFS=',' read -r -a entries <<<"$charge_start_levels"
   for entry in "${entries[@]}"; do
     [[ $entry == BAT*:* ]] || continue
     name=${entry%%:*}
@@ -265,7 +265,7 @@ send_unplug_notification() {
     fi
   done
 
-  IFS=',' read -r -a entries <<< "$(capture_battery_levels)"
+  IFS=',' read -r -a entries <<<"$(capture_battery_levels)"
   for entry in "${entries[@]}"; do
     [[ $entry == BAT*:* ]] || continue
     name=${entry%%:*}
@@ -276,8 +276,8 @@ send_unplug_notification() {
     fi
   done
 
-  if [[ $charge_session_valid == 1 ]] && is_nonnegative_integer "$last_charge_start" \
-    && is_nonnegative_integer "$last_charge_end" && ((last_charge_end >= last_charge_start)); then
+  if [[ $charge_session_valid == 1 ]] && is_nonnegative_integer "$last_charge_start" &&
+    is_nonnegative_integer "$last_charge_end" && ((last_charge_end >= last_charge_start)); then
     duration=$(format_session_minutes "$((last_charge_end - last_charge_start))")
     rows+=("Charged for ~$duration")
 
@@ -311,9 +311,10 @@ send_unplug_notification() {
 }
 
 current_state="on-battery"
-(( ac_online == 1 )) && current_state="on-charge"
+((ac_online == 1)) && current_state="on-charge"
 previous_state=""
 state_since=0
+state_since_at_least=0
 last_charge_end=0
 last_charge_start=0
 last_observed=0
@@ -336,7 +337,7 @@ is_nonnegative_integer "$now" || {
   exit 1
 }
 continuity=1
-if [[ "$last_observed" =~ ^[0-9]+$ ]] && (( last_observed > 0 )) && (( now < last_observed || now - last_observed > 90 )); then
+if [[ "$last_observed" =~ ^[0-9]+$ ]] && ((last_observed > 0)) && ((now < last_observed || now - last_observed > 90)); then
   continuity=0
 fi
 current_battery_fingerprint=$(capture_battery_fingerprint)
@@ -349,6 +350,7 @@ battery_fingerprint="$current_battery_fingerprint"
 
 if [[ -n "$previous_state" && "$previous_state" != "$current_state" ]]; then
   state_since="$now"
+  state_since_at_least=0
   if [[ "$previous_state" == "on-charge" && "$current_state" == "on-battery" ]]; then
     last_charge_end="$now"
     ((continuity == 1)) || charge_session_valid=0
@@ -359,9 +361,17 @@ if [[ -n "$previous_state" && "$previous_state" != "$current_state" ]]; then
     charge_session_valid=$continuity
   fi
 elif [[ -z "$previous_state" || "$continuity" == 0 ]]; then
-  # Unknown initial or interrupted session: wait for a real transition before showing a time.
-  state_since=0
+  # We cannot recover the true start after an initial observation or polling
+  # gap, so start a new observed session here instead of leaving the panel at
+  # "—" forever until the next power transition.
+  state_since="$now"
+  state_since_at_least=1
   charge_session_valid=0
+elif ! is_nonnegative_integer "$state_since" || ((state_since == 0)); then
+  # Recover state files created by older installs while already in this power
+  # state. Those files otherwise keep the panel at "—" indefinitely.
+  state_since="$now"
+  state_since_at_least=1
 fi
 
 record_discharge_window() {
@@ -400,7 +410,7 @@ record_discharge_window() {
     window_start_energy_uwh=$current_energy
     return 0
   fi
-  draw=$(( (energy_used * 3600 + elapsed * 500) / (elapsed * 1000) ))
+  draw=$(((energy_used * 3600 + elapsed * 500) / (elapsed * 1000)))
   if ((draw < 100 || draw > 120000)); then
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
@@ -422,7 +432,7 @@ record_discharge_window() {
       printf '# battery-discharge-history\tv1\n'
     fi
     printf '%s\t%s\t%s\t%s\n' "$now" "$discharge_session_id" "$draw" "$(capture_energy_capacity_uwh)"
-  } > "$tmp_file"
+  } >"$tmp_file"
   mv -f -- "$tmp_file" "$history_file"
   window_start_epoch=$now
   window_start_energy_uwh=$current_energy
@@ -450,6 +460,7 @@ compute_usual_runtime
 # An event is authoritative even if the fallback timer observed the state first.
 if ((power_event == 1)) && [[ $current_state == "on-charge" && $charge_session_valid != 1 ]]; then
   state_since=$now
+  state_since_at_least=0
   last_charge_start=$now
   charge_start_levels=$(capture_battery_levels)
   charge_session_valid=1
@@ -460,6 +471,7 @@ tmp_file="$state_file.tmp.$$"
 {
   printf 'previous_state=%q\n' "$current_state"
   printf 'state_since=%q\n' "$state_since"
+  printf 'state_since_at_least=%q\n' "$state_since_at_least"
   printf 'last_charge_end=%q\n' "$last_charge_end"
   printf 'last_charge_start=%q\n' "$last_charge_start"
   printf 'last_observed=%q\n' "$now"
@@ -472,7 +484,7 @@ tmp_file="$state_file.tmp.$$"
   printf 'window_start_energy_uwh=%q\n' "$window_start_energy_uwh"
   printf 'last_sample_energy_uwh=%q\n' "$last_sample_energy_uwh"
   printf 'battery_fingerprint=%q\n' "$battery_fingerprint"
-} > "$tmp_file"
+} >"$tmp_file"
 mv -f "$tmp_file" "$state_file"
 
 if ((power_event == 1)); then

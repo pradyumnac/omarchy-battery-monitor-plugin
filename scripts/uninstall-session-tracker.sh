@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
-# Remove everything install-session-tracker.sh created: the running service,
-# its systemd units, the copied tracker files, and the recorded session
-# state. The machine is left as if the plugin had never been installed.
+# Remove the running service, systemd units, and copied plugin files created
+# by install-session-tracker.sh. Recorded session and intelligence data is
+# removed by default; pass --keep-data to retain it for a later reinstall.
 # The operation is repeatable and never requires root access. Every path
 # removed is printed as it happens.
 
 set -euo pipefail
+
+keep_data=0
+case ${1-} in
+"") ;;
+--keep-data) keep_data=1 ;;
+*)
+  printf 'Usage: %s [--keep-data]\n' "${0##*/}" >&2
+  exit 2
+  ;;
+esac
 
 log_remove() {
   printf 'uninstall: removed %s\n' "$1"
@@ -77,6 +87,9 @@ if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
   rmdir -- "$plugin_dir" 2>/dev/null && log_remove "$plugin_dir"
 fi
 
-remove_path "$state_dir"
-
-printf 'Battery session tracker uninstalled; session state removed.\n'
+if ((keep_data == 1)); then
+  printf 'Battery session tracker uninstalled; data retained at %s.\n' "$state_dir"
+else
+  remove_path "$state_dir"
+  printf 'Battery session tracker uninstalled; session and intelligence data removed.\n'
+fi

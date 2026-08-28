@@ -40,6 +40,25 @@ flowchart TD
 
 Unplug settles fast (0.22s-0.65s on a T480), so this path never waits.
 
+## Session timing confidence
+
+Session timing is separate from battery intelligence. A real AC transition
+provides an exact `state_since`, and the panel shows a plain duration such as
+`5m`. When the transition itself was not observed, the tracker can only
+establish a lower bound and the panel shows `> 5m`, meaning **at least five
+minutes**.
+
+| Tracker observation | Confidence | Panel |
+| --- | --- | --- |
+| Real AC/battery transition | Exact start | `X` |
+| First run while already plugged or unplugged | Lower bound from first observation | `> X` |
+| Same state after a polling gap over 90s or clock reversal | Lower bound from first post-gap observation | `> X` |
+| Existing state has no valid session timestamp | Lower bound from recovery observation | `> X` |
+| Next real transition after any lower-bound state | Exact start restored | `X` |
+
+The tracker persists this distinction in `state_since_at_least`; see the
+[state file reference](state-file-reference.md#session-duration-confidence).
+
 ## Battery intelligence
 
 The tracker samples aggregate `energy_now` and usable capacity every 30 seconds
@@ -71,12 +90,12 @@ These transitions aren't covered by a flow above because the current
 implementation doesn't define one. Treat them as backlog, not behavior —
 see [requirements spec](requirements-spec.md) for tracking.
 
-- **Suspend / resume.** No defined behavior for a mains change that happens
-  while the system is suspended. The state file may show a stale
-  `state_since` on resume.
-- **Shutdown / poweroff mid-session.** No flush-on-shutdown path exists.
-  A charging session in progress at shutdown leaves the state file at its
-  last poll, up to 30s stale, and the next boot reads that stale state.
+- **Suspend / resume.** A gap over 90 seconds produces a `> X` lower bound,
+  but a mains change followed by a return to the original state while suspended
+  cannot be reconstructed.
+- **Shutdown / poweroff mid-session.** No flush-on-shutdown path exists. On
+  restart, a gap over 90 seconds produces `> X`; transitions that happened
+  while the tracker was stopped cannot be reconstructed.
 - **Last battery removed at runtime.** The tracker already reports a
   battery removed mid-session (see the notifications doc), but full
   desktop-mode fallback — no battery present at all after boot — is only
