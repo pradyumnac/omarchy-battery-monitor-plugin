@@ -90,6 +90,26 @@ test("preflight passes when a battery and all commands are present", () => {
   }
 });
 
+test("preflight accepts a battery with no present file", () => {
+  const root = fs.mkdtempSync(path.join(testRoot, "preflight-nopresent-"));
+  try {
+    const battery = path.join(root, "BAT0");
+    fs.mkdirSync(battery);
+    fs.writeFileSync(path.join(battery, "status"), "Discharging\n");
+    fs.writeFileSync(path.join(battery, "capacity"), "57\n");
+
+    const result = spawnSync(preflight, [], {
+      env: { ...process.env, POWER_SUPPLY_ROOT: root },
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /Ready to install\./);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("installer refuses to install on a machine with no battery", () => {
   const root = fs.mkdtempSync(path.join(testRoot, "install-nobattery-"));
   const plugin = fs.mkdtempSync(path.join(testRoot, "install-plugin-"));

@@ -33,7 +33,12 @@ check_warn() {
 battery_found=0
 if [[ -d "$power_supply_root" ]]; then
   for battery_dir in "$power_supply_root"/BAT*; do
-    [[ -f "$battery_dir/present" && "$(<"$battery_dir/present")" == "1" ]] || continue
+    [[ -d "$battery_dir" ]] || continue
+    if [[ -f "$battery_dir/present" ]]; then
+      [[ "$(<"$battery_dir/present")" == "1" ]] || continue
+    else
+      [[ -f "$battery_dir/status" || -f "$battery_dir/capacity" ]] || continue
+    fi
     battery_found=1
     break
   done

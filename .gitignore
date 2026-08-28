@@ -4,3 +4,7 @@ state/
 *.log
 *.swp
 .DS_Store
+
+# Local session notes and verification scripts
+HANDOFF.md
+.scratch/

@@ -24,9 +24,15 @@ current_power_state() {
 
 any_battery_charging() {
   local battery_dir
+  local present
   for battery_dir in "$power_supply_root"/BAT*; do
-    if [[ -f "$battery_dir/present" && "$(<"$battery_dir/present")" == "1" \
-      && -f "$battery_dir/status" && "$(<"$battery_dir/status")" == "Charging" ]]; then
+    if [[ -f "$battery_dir/present" ]]; then
+      present=$(<"$battery_dir/present")
+      [[ $present == "1" ]] || continue
+    elif [[ ! -f "$battery_dir/status" && ! -f "$battery_dir/capacity" ]]; then
+      continue
+    fi
+    if [[ -f "$battery_dir/status" && "$(<"$battery_dir/status")" == "Charging" ]]; then
       return 0
     fi
   done

@@ -133,7 +133,7 @@ test("notifies once with dual-battery charging details", () => {
       "6000",
       "Plugged",
     ]);
-    assert.equal(args[9], "BAT0 · 20%");
+    assert.equal(args[9], "BAT0 · 20%\n⚠ Charge threshold:\nBAT1 · 80%");
     assert.equal(args.length, 10);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
@@ -141,7 +141,7 @@ test("notifies once with dual-battery charging details", () => {
   }
 });
 
-test("uses Plugged without listing held batteries as charging", () => {
+test("uses Plugged with a charge-threshold block when a battery is held", () => {
   const f = fixture();
   const notifier = path.join(f.state, "notifier");
   const notificationLog = path.join(f.state, "notifications");
@@ -153,7 +153,7 @@ test("uses Plugged without listing held batteries as charging", () => {
     );
     writeBattery(f.root, "BAT0", {
       present: 1,
-      capacity: 80,
+      capacity: 95,
       status: "Not charging",
     });
     runTracker(f);
@@ -169,7 +169,7 @@ test("uses Plugged without listing held batteries as charging", () => {
 
     const args = fs.readFileSync(notificationLog, "utf8").split("\0");
     assert.equal(args[8], "Plugged");
-    assert.equal(args[9], "No battery is charging");
+    assert.equal(args[9], "⚠ Charge threshold:\nBAT0 · 95%");
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
     fs.rmSync(f.state, { recursive: true, force: true });
@@ -334,6 +334,95 @@ test("unplug omits duration and deltas when the charge start is unknown", () => 
   }
 });
 
+test("reports a battery removed mid-session as removed", () => {
+  const f = fixture();
+  const notifier = path.join(f.state, "notifier");
+  const notificationLog = path.join(f.state, "notifications");
+  try {
+    fs.writeFileSync(
+      notifier,
+      '#!/usr/bin/env bash\nprintf \'%s\\0\' "$@" >> "$BATTERY_NOTIFICATION_LOG"\n',
+      { mode: 0o700 },
+    );
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      capacity: 30,
+      status: "Discharging",
+    });
+    writeBattery(f.root, "BAT1", {
+      present: 1,
+      capacity: 80,
+      status: "Discharging",
+    });
+    writeBattery(f.root, "AC", { type: "Mains", online: 1 });
+    fs.writeFileSync(path.join(f.root, "BAT0", "status"), "Charging\n");
+    runTracker(f, {}, ["--power-event"]);
+
+    fs.rmSync(path.join(f.root, "BAT1"), { recursive: true, force: true });
+    fs.writeFileSync(path.join(f.root, "AC", "online"), "0\n");
+    fs.writeFileSync(path.join(f.root, "BAT0", "status"), "Discharging\n");
+    const notifyEnv = {
+      BATTERY_SESSION_NOTIFY_COMMAND: notifier,
+      BATTERY_NOTIFICATION_LOG: notificationLog,
+    };
+    runTracker(f, notifyEnv, ["--power-event"]);
+
+    const args = fs
+      .readFileSync(notificationLog, "utf8")
+      .split("\0")
+      .filter(Boolean);
+    const description = args[args.length - 1];
+    assert.match(description, /BAT1: 80% → removed/);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("reports a battery added mid-session as added", () => {
+  const f = fixture();
+  const notifier = path.join(f.state, "notifier");
+  const notificationLog = path.join(f.state, "notifications");
+  try {
+    fs.writeFileSync(
+      notifier,
+      '#!/usr/bin/env bash\nprintf \'%s\\0\' "$@" >> "$BATTERY_NOTIFICATION_LOG"\n',
+      { mode: 0o700 },
+    );
+    writeBattery(f.root, "BAT0", {
+      present: 1,
+      capacity: 30,
+      status: "Discharging",
+    });
+    writeBattery(f.root, "AC", { type: "Mains", online: 1 });
+    fs.writeFileSync(path.join(f.root, "BAT0", "status"), "Charging\n");
+    runTracker(f, {}, ["--power-event"]);
+
+    writeBattery(f.root, "BAT1", {
+      present: 1,
+      capacity: 80,
+      status: "Discharging",
+    });
+    fs.writeFileSync(path.join(f.root, "AC", "online"), "0\n");
+    fs.writeFileSync(path.join(f.root, "BAT0", "status"), "Discharging\n");
+    const notifyEnv = {
+      BATTERY_SESSION_NOTIFY_COMMAND: notifier,
+      BATTERY_NOTIFICATION_LOG: notificationLog,
+    };
+    runTracker(f, notifyEnv, ["--power-event"]);
+
+    const args = fs
+      .readFileSync(notificationLog, "utf8")
+      .split("\0")
+      .filter(Boolean);
+    const description = args[args.length - 1];
+    assert.match(description, /BAT1: added at 80%/);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
 test("records charger removal as the end of charging", () => {
   const f = fixture();
   try {
@@ -376,6 +465,27 @@ test("does not continue a session after a long observation gap", () => {
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
     fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
+test("tracks a battery that has no present file", () => {
+  const root = fs.mkdtempSync(path.join(testRoot, "battery-power-"));
+  const state = fs.mkdtempSync(path.join(testRoot, "battery-state-"));
+  try {
+    fs.mkdirSync(path.join(root, "BAT0"));
+    fs.writeFileSync(path.join(root, "BAT0", "status"), "Discharging\n");
+    fs.writeFileSync(path.join(root, "BAT0", "capacity"), "57\n");
+    execFileSync(tracker, [], {
+      env: {
+        ...process.env,
+        POWER_SUPPLY_ROOT: root,
+        BATTERY_SESSION_STATE_DIR: state,
+      },
+    });
+    assert.equal(fs.existsSync(path.join(state, "state")), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(state, { recursive: true, force: true });
   }
 });
 

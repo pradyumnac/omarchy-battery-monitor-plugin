@@ -43,9 +43,17 @@ BAT0 · 22%
   percentage.
 
 If two batteries charge at once, each gets its own row. A battery held at
-its charge threshold does not appear as charging. If no battery is charging
-yet — for example, a battery already above its charge threshold — the body
-reads `No battery is charging`.
+its charge threshold does not appear as charging; it appears in a
+`⚠ Charge threshold:` block after the charging rows:
+
+```text
+Plugged
+⚠ Charge threshold:
+BAT0 · 95%
+```
+
+This tells the user why the battery is not charging, instead of leaving
+them to guess.
 
 The notification does not show aggregate pack level, charge rate, or time
 to full. The panel already shows those; the notification only reports the
@@ -79,6 +87,9 @@ timestamps behind it are approximate.
 - Omit a value that is not known. Do not show a misleading zero.
 - Never repeat a notification while the observed power state stays the
   same.
+- A plug shorter than the battery's settle time sends only `Unplugged`, with
+  no `Plugged` notification. A connection that stops before any battery
+  starts charging is not an event to report.
 
 ## Batteries added or removed mid-session
 
@@ -86,7 +97,7 @@ timestamps behind it are approximate.
 | --- | --- | --- |
 | One battery | Its name and current percentage. | Its start and end percentages. |
 | Two batteries charging | Each battery on its own row. | Each battery's start and end percentages on its own row. |
-| One charging, one held at threshold | Only the charging battery. | Both rows; equal start and end values already show no change. |
+| One charging, one held at threshold | The charging battery, then the held battery in the `⚠ Charge threshold:` block. | Both rows; equal start and end values already show no change. |
 | Battery present at session start only | Shown at connection. | Row reads `removed`, with its start level. No invented end value. |
 | Battery present at session end only | Not part of the connection snapshot. | Row reads `added`, with its end level. No invented start value. |
 | No laptop battery | No notification is sent. | The panel stays hidden. |
@@ -106,7 +117,7 @@ flowchart TD
     confirmed -- Yes --> plug[Send Plugged<br/>immediately]
     confirmed -- No --> wait[Wait up to 15s for a<br/>battery-state event]
     wait -- Battery starts charging --> plug
-    wait -- Timeout elapses --> plugFallback[Send Plugged with the<br/>battery's real status<br/>may read No battery is charging]
+    wait -- Timeout elapses --> plugFallback[Send Plugged with the<br/>battery's real status<br/>may show only the threshold block]
     changed -- Charge to battery --> finish[Capture end snapshot]
     finish --> reliable{Start snapshot and<br/>continuity reliable?}
     reliable -- Yes --> unplug[Send Unplugged<br/>immediately]
@@ -196,13 +207,15 @@ traces back to a real UPower event, never to the fallback poll.
 | Duplicate notifications on repeated events | `tests/monitor.test.js` |
 | Notification delivery failure does not block state persistence | `tests/tracker.test.js` |
 | Unknown session start falls back to current facts only | `tests/tracker.test.js` |
+| A battery removed mid-session reports `removed` on unplug | `tests/tracker.test.js` |
+| A battery added mid-session reports `added` on unplug | `tests/tracker.test.js` |
+| A held battery is reported in a `⚠ Charge threshold:` block | `tests/tracker.test.js` |
+| A battery with no `present` file is still tracked | `tests/tracker.test.js`, `tests/preflight.test.js` |
 | Every file write stays under the user's home directory | `tests/write-boundary.test.js` |
 | Install refuses on a machine with no battery | `tests/preflight.test.js` |
 
-**Not yet covered:** a battery added or removed partway through a session
-(the state-machine rule exists in `battery-session-tracker`; see
-`send_unplug_notification`). Real-hardware verification across laptop
-models also remains open — see
+**Not yet covered:** real-hardware verification across laptop models
+remains open — see
 [issue #4](https://github.com/pradyumnac/omarchy-battery-monitor-plugin/issues/4)
 for the current verification matrix and how to add a report.
 

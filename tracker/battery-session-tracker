@@ -42,10 +42,13 @@ ac_mains_online && ac_online=1
 # Do not create a fake battery session on desktops.
 battery_dirs=()
 for battery_dir in "$power_supply_root"/BAT*; do
-  if [[ -d "$battery_dir" && -f "$battery_dir/present" \
-    && "$(<"$battery_dir/present")" == "1" ]]; then
-    battery_dirs+=("$battery_dir")
+  [[ -d "$battery_dir" ]] || continue
+  if [[ -f "$battery_dir/present" ]]; then
+    [[ "$(<"$battery_dir/present")" == "1" ]] || continue
+  else
+    [[ -f "$battery_dir/status" || -f "$battery_dir/capacity" ]] || continue
   fi
+  battery_dirs+=("$battery_dir")
 done
 ((${#battery_dirs[@]} > 0)) || exit 0
 
@@ -92,8 +95,8 @@ format_session_minutes() {
 }
 
 send_charge_notification() {
-  local battery_dir name status capacity detail description
-  local -a charging_parts=()
+  local battery_dir name status capacity detail description charging_block held_block
+  local -a charging_parts=() held_parts=()
 
   for battery_dir in "${battery_dirs[@]}"; do
     name=${battery_dir##*/}
@@ -104,11 +107,24 @@ send_charge_notification() {
     detail="$name"
     is_nonnegative_integer "$capacity" && detail+=" · ${capacity}%"
 
-    [[ $status == "Charging" ]] && charging_parts+=("$detail")
+    if [[ $status == "Charging" ]]; then
+      charging_parts+=("$detail")
+    elif [[ $status == "Not charging" ]]; then
+      held_parts+=("$detail")
+    fi
   done
 
-  description=$(join_with_newline "${charging_parts[@]}")
-  [[ -n $description ]] || description="No battery is charging"
+  charging_block=$(join_with_newline "${charging_parts[@]}")
+  if ((${#held_parts[@]} > 0)); then
+    held_block=$(join_with_newline "⚠ Charge threshold:" "${held_parts[@]}")
+    if [[ -n $charging_block ]]; then
+      description="$charging_block"$'\n'"$held_block"
+    else
+      description="$held_block"
+    fi
+  else
+    description="$charging_block"
+  fi
 
   if [[ -n $notification_command ]] && command -v -- "$notification_command" >/dev/null 2>&1; then
     "$notification_command" --app-name doe.power -u low -g "󰂆" -t 6000 \
