@@ -5,17 +5,17 @@
 `make status` separates the two questions that were previously conflated:
 
 ```text
-Current stored energy: 15.0 Wh / 37.0 Wh
-Observed peak capacity: 37.0 Wh (12 observations)
-Usual remaining runtime: 2h 21m
-Expected runtime at peak: 5h 52m
+Energy: 15.0 Wh / 37.0 Wh · 40%
+Model: ready · 12 windows across 3 sessions
+Usual remaining: 2h 21m
+At full: 5h 52m
+Typical draw: 6.3 W
 ```
 
 - **Current stored energy** is the aggregate `energy_now` reading used for the
   panel estimate.
-- **Observed peak capacity** is the median of positive full-capacity values
-  already recorded in valid windows from the recent 30-day model period. The
-  observation count is shown because this remains a diagnostic metric.
+- The energy denominator is the current full usable capacity. Recent observed
+  full-capacity values remain available internally as a compatibility fallback.
 - **Usual remaining runtime** divides current stored energy by the learned
   median draw. This is the value exposed as `≈ Usual` in the panel.
 - **Expected runtime at peak** divides current full usable capacity by the same
@@ -30,11 +30,10 @@ The distinction matters at partial charge. A learned full runtime of `5h 52m` at
 
 Both runtime projections use the existing model gate: at least 12 valid
 15-minute windows across at least 3 discharge sessions in the recent 30-day
-period. Before that gate, status reports `learning` and runtime values remain
-`not ready`.
-
-The peak-capacity diagnostic may be shown from fewer observations while the
-model is learning. Showing it does not make the widget ready.
+period. Before that gate, status reports progress as `X/12 windows` and
+`Y/3 sessions`. A legacy state file can derive remaining runtime from current
+energy and full runtime, so a completed evidence gate never incorrectly reports
+`learning` while an upgraded tracker is being installed.
 
 ## Scope
 

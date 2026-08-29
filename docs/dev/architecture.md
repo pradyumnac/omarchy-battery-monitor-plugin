@@ -87,18 +87,16 @@ always traces back to a real UPower event, never to the poll. See the
 
 ## Operational status
 
-`make status` is the sole operational report. It combines three separated
-sections: systemd details for the monitor and poller, the raw tracker state,
-and interpreted battery-intelligence progress/history. `Usual readiness`
-reflects the model gate with capped `X/12 windows` and `Y/3 recent sessions`
-counters; only windows and distinct sessions from the most recent 30 days
-count. The report separates current stored energy and usual remaining runtime
-from observed peak capacity and expected runtime at that peak. Output is
-ANSI-colored when attached to a terminal and plain when redirected or when
-`NO_COLOR` is set; `BATTERY_STATUS_COLOR=always` forces
-ANSI output for redirected reports. `scripts/battery-intelligence-status.sh`
-is an internal renderer for the last section, not a separate user-facing Make
-target.
+`make status` is the sole operational report. It intentionally summarizes
+rather than dumping systemd logs or raw state: service health, current energy,
+usual remaining runtime, full-battery runtime, typical draw, model readiness,
+active-sample progress, and freshness. While learning, it shows capped
+`X/12 windows` and `Y/3 recent sessions` counters; only windows and distinct
+sessions from the most recent 30 days count. Output is ANSI-colored when
+attached to a terminal and plain when redirected or when `NO_COLOR` is set;
+`BATTERY_STATUS_COLOR=always` forces ANSI output for redirected reports.
+`scripts/battery-intelligence-status.sh` is the internal renderer, not a
+separate user-facing Make target.
 
 ## Open edge cases
 

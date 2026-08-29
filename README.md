@@ -39,11 +39,12 @@ Full install, uninstall, and troubleshooting steps:
 make status
 ```
 
-This is the single operational report: color-coded service health, raw tracker
-state, and battery-intelligence learning/history progress. The intelligence
-section reports `Usual` readiness as capped `X/12 windows` and `Y/3 sessions`
-counters. Colors are enabled on a terminal, disabled with `NO_COLOR=1 make status`, and
-can be forced through a pipe with `BATTERY_STATUS_COLOR=always make status`.
+This concise operational report shows service health, current energy, usual
+remaining runtime, full-battery runtime, typical draw, model readiness, and
+sample freshness. While learning, it shows capped `X/12 windows` and
+`Y/3 sessions` progress. Colors are enabled on a terminal, disabled with
+`NO_COLOR=1 make status`, and can be forced through a pipe with
+`BATTERY_STATUS_COLOR=always make status`.
 
 ## Learn more
 

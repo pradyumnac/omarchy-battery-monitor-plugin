@@ -25,11 +25,10 @@ Inspect the complete runtime report with:
 make status
 ```
 
-It prints separated, color-coded sections for service health, raw tracker
-state, active-window progress, and the local history used for the `≈ Usual`
-runtime estimate. `Usual readiness` shows both requirements as progress —
-`X/12 windows` and `Y/3 sessions` — so learning is visible before the estimate
-is ready. ANSI colors are automatic on a terminal; use
+It prints a concise, color-coded summary of service health, current energy,
+usual remaining runtime, full-battery runtime, typical draw, model readiness,
+and sample freshness. While learning, model progress is shown as `X/12 windows`
+and `Y/3 sessions`. ANSI colors are automatic on a terminal; use
 `NO_COLOR=1 make status` for plain output or
 `BATTERY_STATUS_COLOR=always make status` to preserve colors through a pipe.
 Runtime data is kept in
@@ -98,6 +97,6 @@ rapid uninstall/reinstall.
 | `make install` stops with "no present battery" | `make doctor` found no laptop battery | Expected on desktops — the plugin only supports laptops |
 | Widget doesn't appear after install | Shell wasn't running during install | Run `omarchy restart shell` |
 | `make doctor` reports missing `upower` | UPower isn't installed | Install `upower` through your package manager |
-| Notifications don't appear | `battery-session-monitor.service` isn't active | Run `make status` and inspect **SERVICE STATUS** |
+| Notifications don't appear | `battery-session-monitor.service` isn't active | Run `make status` and inspect **Services** |
 
 See [notifications](notifications.md) for what each notification means.

@@ -85,9 +85,8 @@ Use the combined, formatted report for normal diagnostics:
 make status
 ```
 
-Its **TRACKER STATE** section shows this file verbatim as color-coded key/value
-rows, followed by the interpreted **BATTERY INTELLIGENCE** section. To read
-only the file directly:
+The report intentionally shows only interpreted battery and model facts. To
+inspect every persisted field for low-level debugging, read the file directly:
 
 ```sh
 cat "${XDG_STATE_HOME:-$HOME/.local/state}/battery-session/state"

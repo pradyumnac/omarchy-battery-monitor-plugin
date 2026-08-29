@@ -67,28 +67,57 @@ test("reports model readiness, active window, and recorded history", () => {
 
     const result = runStatus(stateDir);
     assert.equal(result.status, 0);
-    assert.match(result.stdout, /Monitor: active/);
-    assert.match(result.stdout, /Poller: active/);
+    assert.match(result.stdout, /BATTERY STATUS/);
+    assert.match(result.stdout, /Services: tracker active · monitor active/);
+    assert.match(result.stdout, /Power: unknown/);
+    assert.match(result.stdout, /Energy: 40\.0 Wh \/ 50\.0 Wh · 80%/);
     assert.match(
       result.stdout,
-      /Usual readiness: ready \(12\/12 windows, 3\/3 sessions\)/,
+      /Model: ready · 12 windows across 3 sessions/,
     );
-    assert.match(result.stdout, /Current stored energy: 40\.0 Wh \/ 50\.0 Wh/);
+    assert.match(result.stdout, /Usual remaining: 4h/);
+    assert.match(result.stdout, /At full: 5h/);
+    assert.match(result.stdout, /Typical draw: 10\.6 W/);
+    assert.match(result.stdout, /Current sample: 50% · 8m of 15m/);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("derives remaining runtime from legacy tracker state", () => {
+  const stateDir = fs.mkdtempSync(path.join(testRoot, "intelligence-legacy-"));
+  try {
+    fs.writeFileSync(
+      path.join(stateDir, "state"),
+      [
+        "previous_state=on-battery",
+        "state_since=19999000",
+        "last_observed=19999990",
+        "last_sample_energy_uwh=40000000",
+        "usual_full_runtime_seconds=18000",
+      ].join("\n") + "\n",
+    );
+    fs.writeFileSync(
+      path.join(stateDir, "discharge-history.tsv"),
+      [
+        "# battery-discharge-history\tv1",
+        ...Array.from(
+          { length: 12 },
+          (_, index) =>
+            `${19999900 + index}\tsession-${index % 3}\t10000\t50000000`,
+        ),
+      ].join("\n") + "\n",
+    );
+
+    const result = runStatus(stateDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Energy: 40\.0 Wh \/ 50\.0 Wh · 80%/);
     assert.match(
       result.stdout,
-      /Observed peak capacity: 50\.0 Wh \(12 observations\)/,
+      /Model: ready · 12 windows across 3 sessions/,
     );
-    assert.match(result.stdout, /Usual remaining runtime: 4h/);
-    assert.match(result.stdout, /Expected runtime at peak: 5h/);
-    assert.match(result.stdout, /Active window: 50% \(8m \/ 15m\)/);
-    assert.match(
-      result.stdout,
-      /History: 12 valid rows \(12 recent \/ 3 recent sessions\)/,
-    );
-    assert.match(
-      result.stdout,
-      /Last recorded window: 15m at 19999911 \(11.1 W draw, 50.0 Wh capacity\)/,
-    );
+    assert.match(result.stdout, /Usual remaining: 4h/);
+    assert.doesNotMatch(result.stdout, /learning/);
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
@@ -109,7 +138,7 @@ test("uses ANSI colors only when requested", () => {
   }
 });
 
-test("make status combines service, tracker, and intelligence sections", () => {
+test("make status renders only the concise human-facing report", () => {
   const root = fs.mkdtempSync(path.join(testRoot, "combined-status-"));
   const stateDir = path.join(root, "battery-session");
   const bin = path.join(root, "bin");
@@ -119,11 +148,9 @@ test("make status combines service, tracker, and intelligence sections", () => {
     path.join(stateDir, "state"),
     "previous_state=on-battery\nusual_sample_count=0\n",
   );
-  fs.writeFileSync(
-    path.join(bin, "systemctl"),
-    "#!/usr/bin/env bash\nif [[ $* == *' status '* ]]; then printf 'stub service details\\n'; fi\nexit 0\n",
-    { mode: 0o700 },
-  );
+  fs.writeFileSync(path.join(bin, "systemctl"), "#!/bin/sh\nexit 0\n", {
+    mode: 0o700,
+  });
   try {
     const statusEnv = {
       ...process.env,
@@ -148,23 +175,18 @@ test("make status combines service, tracker, and intelligence sections", () => {
       { cwd: repository, encoding: "utf8" },
     );
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /SERVICE STATUS[\s\S]*stub service details/);
+    assert.match(result.stdout, /^BATTERY STATUS/m);
+    assert.match(result.stdout, /Services: tracker active · monitor active/);
     assert.match(
       result.stdout,
-      /TRACKER STATE[\s\S]*previous_state = on-battery/,
+      /Model: learning · 0\/12 windows · 0\/3 sessions/,
     );
-    assert.match(
-      result.stdout,
-      /BATTERY INTELLIGENCE[\s\S]*Usual readiness: learning \(0\/12 windows, 0\/3 sessions\)/,
-    );
-    assert.match(
-      result.stdout,
-      /BATTERY INTELLIGENCE[\s\S]*Observed peak capacity: not available/,
-    );
+    assert.equal(result.stdout.includes("previous_state"), false);
+    assert.equal(result.stdout.includes("stub service details"), false);
     assert.equal(result.stdout.includes(ansi), false);
     assert.equal(colored.status, 0, colored.stderr);
     assert.equal(
-      colored.stdout.includes(`${ansi}[1m${ansi}[36mSERVICE STATUS`),
+      colored.stdout.includes(`${ansi}[1m${ansi}[36mBATTERY STATUS`),
       true,
     );
     assert.equal(colored.stdout.includes(`${ansi}[33mlearning`), true);
@@ -181,14 +203,9 @@ test("reports learning state before any observations", () => {
   try {
     const result = runStatus(stateDir);
     assert.equal(result.status, 0);
-    assert.match(
-      result.stdout,
-      /Usual readiness: waiting for first tracker poll \(0\/12 windows, 0\/3 sessions\)/,
-    );
-    assert.match(result.stdout, /Current stored energy: not available/);
-    assert.match(result.stdout, /Observed peak capacity: not available/);
-    assert.match(result.stdout, /Usual remaining runtime: not ready/);
-    assert.match(result.stdout, /Expected runtime at peak: not ready/);
+    assert.match(result.stdout, /Model: waiting for first tracker poll/);
+    assert.match(result.stdout, /Learning: 0\/12 windows · 0\/3 sessions/);
+    assert.equal(result.stdout.includes("Energy:"), false);
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
