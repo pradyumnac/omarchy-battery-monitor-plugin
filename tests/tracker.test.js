@@ -199,6 +199,28 @@ test("uses recent observations while retaining older back-reference data", () =>
   }
 });
 
+test("ignores future-dated observations in the model", () => {
+  const f = fixture();
+  try {
+    writeBattery(f.root, "BAT0", { present: 1, energy_full: 50000000 });
+    const recent = Array.from(
+      { length: 11 },
+      (_, index) => `${19990000 + index}\trecent-${index % 3}\t10000\t50000000`,
+    );
+    writeHistory(f.state, [
+      ...recent,
+      "20000100\tfuture-session\t10000\t50000000",
+    ]);
+
+    const state = runTracker(f, { BATTERY_SESSION_NOW: "20000000" });
+    assert.match(state, /^usual_full_runtime_seconds=0$/m);
+    assert.match(state, /^usual_sample_count=0$/m);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+    fs.rmSync(f.state, { recursive: true, force: true });
+  }
+});
+
 test("uses the median instead of an outlier for an odd sample set", () => {
   const f = fixture();
   try {
@@ -247,6 +269,7 @@ test("resets a discharge window when energy increases", () => {
       false,
     );
     assert.match(state, /^window_start_epoch=1060$/m);
+    assert.match(state, /^window_reset_reason=energy-increased$/m);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
     fs.rmSync(f.state, { recursive: true, force: true });
@@ -270,6 +293,7 @@ test("does not bridge a long polling gap into a discharge window", () => {
       false,
     );
     assert.match(state, /^window_start_epoch=2000$/m);
+    assert.match(state, /^window_reset_reason=polling-gap$/m);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
     fs.rmSync(f.state, { recursive: true, force: true });
@@ -286,6 +310,9 @@ test("rejects an implausibly high discharge draw", () => {
       energy_full: 50000000,
     });
     runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+    for (let timestamp = 1030; timestamp < 1900; timestamp += 30) {
+      runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
+    }
     writeBattery(f.root, "BAT0", { energy_now: 10000000 });
     const state = runTracker(f, { BATTERY_SESSION_NOW: "1900" });
     assert.equal(
@@ -293,6 +320,7 @@ test("rejects an implausibly high discharge draw", () => {
       false,
     );
     assert.match(state, /^window_start_epoch=1900$/m);
+    assert.match(state, /^window_reset_reason=implausible-draw$/m);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
     fs.rmSync(f.state, { recursive: true, force: true });
@@ -316,6 +344,7 @@ test("resets sampling when energy data is missing or zero", () => {
     );
     assert.match(state, /^window_start_epoch=0$/m);
     assert.match(state, /^last_sample_energy_uwh=0$/m);
+    assert.match(state, /^window_reset_reason=energy-unavailable$/m);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
     fs.rmSync(f.state, { recursive: true, force: true });
@@ -339,6 +368,7 @@ test("resets sampling when the clock moves backwards", () => {
       false,
     );
     assert.match(state, /^window_start_epoch=900$/m);
+    assert.match(state, /^window_reset_reason=polling-gap$/m);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
     fs.rmSync(f.state, { recursive: true, force: true });
@@ -400,6 +430,7 @@ test("invalidates only the active window when a battery is added", () => {
     );
     assert.match(state, /^window_start_epoch=1030$/m);
     assert.match(state, /^window_start_energy_uwh=90000000$/m);
+    assert.match(state, /^window_reset_reason=battery-set-changed$/m);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
     fs.rmSync(f.state, { recursive: true, force: true });
@@ -430,6 +461,7 @@ test("invalidates only the active window when a battery is removed", () => {
     );
     assert.match(state, /^window_start_epoch=1030$/m);
     assert.match(state, /^window_start_energy_uwh=50000000$/m);
+    assert.match(state, /^window_reset_reason=battery-set-changed$/m);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
     fs.rmSync(f.state, { recursive: true, force: true });
@@ -455,6 +487,7 @@ test("rejects mixed battery energy measurement modes", () => {
     const state = runTracker(f, { BATTERY_SESSION_NOW: "1030" });
     assert.match(state, /^window_start_epoch=0$/m);
     assert.match(state, /^last_sample_energy_uwh=0$/m);
+    assert.match(state, /^window_reset_reason=energy-unavailable$/m);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
     fs.rmSync(f.state, { recursive: true, force: true });
@@ -479,6 +512,7 @@ test("ignores unknown history schemas safely", () => {
     );
     const state = runTracker(f, { BATTERY_SESSION_NOW: "2000" });
     assert.match(state, /^usual_full_runtime_seconds=0$/m);
+    assert.match(state, /^window_reset_reason=energy-unavailable$/m);
     assert.equal(
       fs
         .readFileSync(path.join(f.state, "discharge-history.tsv"), "utf8")

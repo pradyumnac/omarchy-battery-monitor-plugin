@@ -32,6 +32,7 @@ write on power events. The panel reads it every refresh.
 | `window_start_epoch` | Start of the active 15-minute energy window | Builds a discharge observation |
 | `window_start_energy_uwh` | Aggregate energy at the active window start | Builds a discharge observation |
 | `last_sample_energy_uwh` | Aggregate energy at the previous poll | Detects energy increases |
+| `window_reset_reason` | Last actionable reason the active sample restarted/paused, or empty | Conditional `make status` sampling warning |
 | `battery_fingerprint` | Names, measurement mode, and capacity of present batteries | Invalidates a window after topology changes |
 
 ## Session-duration confidence
@@ -61,9 +62,11 @@ normal session-duration rounding.
 ```
 
 Only the most recent 96 valid rows younger than 180 days are retained. The
-model uses only rows from the most recent 30 days, requires at least 12 rows
-across 3 sessions, and uses their median draw. This makes `Usual` responsive
-to recent usage while retaining a limited longer back-reference.
+model uses only rows from the most recent 30 days that are not future-dated,
+requires at least 12 rows across 3 sessions, and uses their median draw. This
+makes `Usual` responsive to recent usage while retaining a limited longer
+back-reference. Future-dated rows survive bounded retention for diagnosis but
+do not count as evidence.
 
 ## Guarantees
 
@@ -85,8 +88,10 @@ Use the combined, formatted report for normal diagnostics:
 make status
 ```
 
-The report intentionally shows only interpreted battery and model facts. To
-inspect every persisted field for low-level debugging, read the file directly:
+The default report intentionally shows only interpreted battery and model
+facts. Use `make status VERBOSE=1` for collection diagnostics; see the
+[status output reference](status-output-reference.md). To inspect every
+persisted field, read the file directly:
 
 ```sh
 cat "${XDG_STATE_HOME:-$HOME/.local/state}/battery-session/state"

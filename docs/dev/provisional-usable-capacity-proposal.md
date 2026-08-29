@@ -6,7 +6,7 @@
 
 ```text
 Energy: 15.0 Wh / 37.0 Wh · 40%
-Model: ready · 12 windows across 3 sessions
+Model: ready · 12 windows / 3 sessions · learned 8m ago
 Usual remaining: 2h 21m
 At full: 5h 52m
 Typical draw: 6.3 W
@@ -31,9 +31,13 @@ The distinction matters at partial charge. A learned full runtime of `5h 52m` at
 Both runtime projections use the existing model gate: at least 12 valid
 15-minute windows across at least 3 discharge sessions in the recent 30-day
 period. Before that gate, status reports progress as `X/12 windows` and
-`Y/3 sessions`. A legacy state file can derive remaining runtime from current
-energy and full runtime, so a completed evidence gate never incorrectly reports
-`learning` while an upgraded tracker is being installed.
+`Y/3 sessions`. After the gate, missing current energy is `blocked`, not
+`learning`; stale current state is explicitly cached. A legacy state file can
+derive remaining runtime from current energy and full runtime, so a completed
+evidence gate never incorrectly reports `learning` during an upgrade.
+
+The full lifecycle and field precedence are defined in the
+[status output reference](status-output-reference.md).
 
 ## Scope
 

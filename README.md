@@ -39,12 +39,12 @@ Full install, uninstall, and troubleshooting steps:
 make status
 ```
 
-This concise operational report shows service health, current energy, usual
-remaining runtime, full-battery runtime, typical draw, model readiness, and
-sample freshness. While learning, it shows capped `X/12 windows` and
-`Y/3 sessions` progress. Colors are enabled on a terminal, disabled with
-`NO_COLOR=1 make status`, and can be forced through a pipe with
-`BATTERY_STATUS_COLOR=always make status`.
+This concise lifecycle report shows service health, charging phase, current
+energy, remaining/full runtime, model readiness and freshness, and actionable
+warnings. While learning, it shows capped `X/12 windows` and `Y/3 sessions`
+progress. Use `make status VERBOSE=1` only for collection diagnostics. See
+[check battery and model health](docs/user/status.md) for examples and recovery
+steps.
 
 ## Learn more
 
@@ -52,8 +52,10 @@ sample freshness. While learning, it shows capped `X/12 windows` and
 | --- | --- |
 | [docs/user/install.md](docs/user/install.md) | Install, uninstall, troubleshooting |
 | [docs/user/notifications.md](docs/user/notifications.md) | What the panel and each notification mean |
-| [docs/dev/architecture.md](docs/dev/architecture.md) | The tracker/monitor state machine, for contributors |
-| [docs/dev/state-file-reference.md](docs/dev/state-file-reference.md) | State file field reference |
+| [docs/user/status.md](docs/user/status.md) | How to check battery/model health and respond to warnings |
+| [docs/dev/architecture.md](docs/dev/architecture.md) | Why the tracker, model, and monitor work this way |
+| [docs/dev/status-output-reference.md](docs/dev/status-output-reference.md) | Status fields and lifecycle-state contract |
+| [docs/dev/state-file-reference.md](docs/dev/state-file-reference.md) | Persisted state and history schema |
 | [docs/dev/requirements-spec.md](docs/dev/requirements-spec.md) | Test coverage, manual QA checklist, backlog |
 
 ## Repo map
@@ -64,8 +66,9 @@ sample freshness. While learning, it shows capped `X/12 windows` and
 | `service/` | The tracker, the monitor, and their systemd units — installed and run long-term |
 | `scripts/` | `install`/`uninstall`/`preflight` — one-shot, run by `make` |
 | `tests/` | Node test suite (`make test`) |
-| `docs/user/` | End-user docs: install, uninstall, notifications |
-| `docs/dev/` | Contributor docs: architecture, state file, requirements spec |
+| `docs/user/` | Goal-oriented user guides and user-facing explanations |
+| `docs/dev/` | Contributor explanations, reference, and verification specs |
+| `docs/research/` | Background research, not implementation decisions |
 
 ## Constraints
 

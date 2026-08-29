@@ -42,12 +42,18 @@ This doc is the single source of pending work. GitHub issues are archived
 | Seeded history produces current-energy and peak-capacity runtime projections | `tests/tracker.test.js` |
 | A valid 15-minute discharge window is recorded | `tests/tracker.test.js` |
 | Recent median ignores outliers and older back-reference data | `tests/tracker.test.js` |
+| Future-dated history is retained for diagnosis but excluded from learning | `tests/tracker.test.js`, `tests/intelligence-status.test.js` |
 | History is bounded to 96 rows and 180 days | `tests/tracker.test.js` |
 | Invalid/discontinuous windows are rejected | `tests/tracker.test.js` |
 | Battery topology changes invalidate only the active window | `tests/tracker.test.js` |
 | Unknown history schemas are ignored safely | `tests/tracker.test.js` |
 | `make status` renders a concise summary without systemd logs or raw state | `tests/intelligence-status.test.js` |
 | Legacy state derives remaining runtime without false `learning` status | `tests/intelligence-status.test.js` |
+| Learning, ready, blocked, unavailable, stale/cached, and clock states are distinct | `tests/intelligence-status.test.js` |
+| Charging, full, and charge-threshold hold use context-specific runtime labels | `tests/intelligence-status.test.js` |
+| No present battery suppresses stale persisted runtime | `tests/intelligence-status.test.js` |
+| Model freshness, archived history, and sampling reset reasons are conditional | `tests/intelligence-status.test.js`, `tests/tracker.test.js` |
+| `VERBOSE=1` adds collection diagnostics without changing the concise default | `tests/intelligence-status.test.js` |
 | Status colors can be forced or disabled for noninteractive output | `tests/intelligence-status.test.js` |
 | Model learning reports capped 12-window and 3-session progress | `tests/intelligence-status.test.js` |
 
@@ -69,9 +75,14 @@ This doc is the single source of pending work. GitHub issues are archived
 - [ ] After enough real use, confirm `≈ Usual` decreases with stored energy and is plausible as remaining active runtime.
 - [ ] Confirm `make status` reports the longer full/peak runtime separately.
 - [ ] Confirm suspend/gaps do not inflate `Usual`.
-- [ ] Run `make status` and confirm the concise summary is readable, semantic
-      states are color-coded, model learning shows both `X/12 windows` and
-      `Y/3 sessions`, and `NO_COLOR=1` removes ANSI styling.
+- [ ] Run `make status` while discharging, charging, full, and held at a charge
+      threshold; confirm runtime labels match each phase.
+- [ ] Stop one user service and confirm runtime becomes `(cached)`, a stale-data
+      warning appears, and the report gives one recovery action.
+- [ ] Run `make status VERBOSE=1` and confirm diagnostics appear without serials,
+      model IDs, applications, or other personal data.
+- [ ] Confirm model learning shows both `X/12 windows` and `Y/3 sessions`, and
+      `NO_COLOR=1 make status` removes ANSI styling.
 - [ ] Run `make uninstall`, reinstall, and confirm history is retained.
 - [ ] Run `make uninstall-purge-data` only on disposable test data and confirm
       the battery-session state directory is removed.

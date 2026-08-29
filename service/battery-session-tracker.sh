@@ -174,7 +174,7 @@ compute_usual_runtime() {
   ((battery_usable_capacity_uwh > 0)) || return 0
 
   while IFS=$'\t' read -r epoch session draw _historical_capacity; do
-    [[ "$epoch" =~ ^[0-9]+$ && "$epoch" -ge "$model_cutoff" && -n "$session" && "$draw" =~ ^[1-9][0-9]*$ ]] || continue
+    [[ "$epoch" =~ ^[0-9]+$ && "$epoch" -ge "$model_cutoff" && "$epoch" -le "$now" && -n "$session" && "$draw" =~ ^[1-9][0-9]*$ ]] || continue
     draws+=("$draw")
     ((draw_count += 1))
     if [[ -z ${sessions[$session]+x} ]]; then
@@ -329,6 +329,7 @@ discharge_session_id=""
 window_start_epoch=0
 window_start_energy_uwh=0
 last_sample_energy_uwh=0
+window_reset_reason=""
 battery_fingerprint=""
 if [[ -f "$state_file" ]]; then
   # The file is created and owned by this user-level service.
@@ -344,12 +345,14 @@ is_nonnegative_integer "$now" || {
 continuity=1
 if [[ "$last_observed" =~ ^[0-9]+$ ]] && ((last_observed > 0)) && ((now < last_observed || now - last_observed > 90)); then
   continuity=0
+  window_reset_reason="polling-gap"
 fi
 current_battery_fingerprint=$(capture_battery_fingerprint)
 if [[ -n "$battery_fingerprint" && "$current_battery_fingerprint" != "$battery_fingerprint" ]]; then
   window_start_epoch=0
   window_start_energy_uwh=0
   last_sample_energy_uwh=0
+  window_reset_reason="battery-set-changed"
 fi
 battery_fingerprint="$current_battery_fingerprint"
 
@@ -386,12 +389,14 @@ record_discharge_window() {
     window_start_epoch=0
     window_start_energy_uwh=0
     last_sample_energy_uwh=0
+    window_reset_reason="energy-unavailable"
     return 0
   fi
   if [[ "$last_sample_energy_uwh" =~ ^[1-9][0-9]*$ ]] && ((current_energy > last_sample_energy_uwh)); then
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
     last_sample_energy_uwh=$current_energy
+    window_reset_reason="energy-increased"
     return 0
   fi
   last_sample_energy_uwh=$current_energy
@@ -413,12 +418,14 @@ record_discharge_window() {
   if ((energy_used <= 0)); then
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
+    window_reset_reason="no-energy-used"
     return 0
   fi
   draw=$(((energy_used * 3600 + elapsed * 500) / (elapsed * 1000)))
   if ((draw < 100 || draw > 120000)); then
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
+    window_reset_reason="implausible-draw"
     return 0
   fi
 
@@ -426,6 +433,7 @@ record_discharge_window() {
   if [[ -f "$history_file" ]] && ! history_schema_valid; then
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
+    window_reset_reason="history-schema-unsupported"
     return 0
   fi
   umask 077
@@ -441,6 +449,7 @@ record_discharge_window() {
   mv -f -- "$tmp_file" "$history_file"
   window_start_epoch=$now
   window_start_energy_uwh=$current_energy
+  window_reset_reason=""
 }
 
 # Start or continue a sampling window only while running on battery.
@@ -457,6 +466,7 @@ else
   window_start_epoch=0
   window_start_energy_uwh=0
   last_sample_energy_uwh=0
+  window_reset_reason=""
 fi
 
 prune_history
@@ -491,6 +501,7 @@ tmp_file="$state_file.tmp.$$"
   printf 'window_start_epoch=%q\n' "$window_start_epoch"
   printf 'window_start_energy_uwh=%q\n' "$window_start_energy_uwh"
   printf 'last_sample_energy_uwh=%q\n' "$last_sample_energy_uwh"
+  printf 'window_reset_reason=%q\n' "$window_reset_reason"
   printf 'battery_fingerprint=%q\n' "$battery_fingerprint"
 } >"$tmp_file"
 mv -f "$tmp_file" "$state_file"

@@ -18,10 +18,18 @@ make check
 ```
 
 For UI changes, test on a laptop with one and two batteries when possible. Also check that the widget stays hidden on a desktop without laptop batteries.
-Use `make status` for the combined service, tracker-state, and intelligence
-report when diagnosing live behavior.
+Use `make status` for the concise lifecycle report and
+`make status VERBOSE=1` for collection diagnostics. The
+[status output reference](docs/dev/status-output-reference.md) defines its
+state/field contract.
 
-If your change affects the panel layout or a notification's title/body, update the matching screenshot — see the screenshot backlog in `HANDOFF.md` (untracked; ask the maintainer if you don't have it).
+Keep documentation in its Diataxis mode: user goal steps are how-to guides,
+design rationale is explanation, and field/state contracts are reference. Link
+between them rather than duplicating content.
+
+If your change affects the panel layout or a notification's title/body, update
+the matching screenshot — see the screenshot backlog in `HANDOFF.md`
+(untracked; ask the maintainer if you don't have it).
 
 ## Pull requests
 

@@ -8,6 +8,17 @@ charger connects or disconnects — the panel's own numbers refresh every 30
 seconds on their own, so a shown duration can lag the real state by up to
 30 seconds. Notifications never lag.
 
+## `≈ Usual` runtime
+
+`≈ Usual` projects how long the energy stored **right now** normally lasts,
+using the median draw learned from recent valid discharge windows. It decreases
+with charge level. It is intentionally different from `Left`, which reacts to
+the current workload and can move quickly.
+
+The panel shows `≈ Usual` only after 12 valid windows across 3 discharge
+sessions. Use [check battery and model health](status.md) to see learning,
+blocked, stale, charging, full, and charge-threshold states.
+
 ## Charger connected: `Plugged`
 
 ![Panel while charging, with the power-profile picker](../../screenshots/panel-detail-charging.png)

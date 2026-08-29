@@ -71,7 +71,7 @@ restart-shell:
 # Show concise service health, current battery facts, and model readiness.
 # Output is TTY-aware; NO_COLOR disables ANSI styling.
 status:
-	@scripts/battery-intelligence-status.sh
+	@BATTERY_STATUS_VERBOSE="$${VERBOSE:-0}" scripts/battery-intelligence-status.sh
 
 # Check this machine is ready to install, without installing anything.
 preflight:

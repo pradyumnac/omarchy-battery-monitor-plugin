@@ -87,16 +87,24 @@ always traces back to a real UPower event, never to the poll. See the
 
 ## Operational status
 
-`make status` is the sole operational report. It intentionally summarizes
-rather than dumping systemd logs or raw state: service health, current energy,
-usual remaining runtime, full-battery runtime, typical draw, model readiness,
-active-sample progress, and freshness. While learning, it shows capped
-`X/12 windows` and `Y/3 recent sessions` counters; only windows and distinct
-sessions from the most recent 30 days count. Output is ANSI-colored when
-attached to a terminal and plain when redirected or when `NO_COLOR` is set;
-`BATTERY_STATUS_COLOR=always` forces ANSI output for redirected reports.
-`scripts/battery-intelligence-status.sh` is the internal renderer, not a
-separate user-facing Make target.
+`make status` is the sole operational report. It joins four views without
+copying their raw payloads: systemd service health, tracker state/freshness,
+recent model history, and current `BAT*` status from sysfs. The direct sysfs
+read distinguishes charging, full, and charge-threshold hold and prevents stale
+persisted state from masquerading as a present battery.
+
+The renderer applies lifecycle precedence rather than calling every failure
+`learning`: no battery or unknown history is `unavailable`; completed evidence
+without current energy is `blocked`; stale/current-clock data is `cached`; only
+an incomplete evidence gate is `learning`. Tracker freshness and model
+freshness are separate because a recently polled state can still use old
+learned observations.
+
+The default remains concise. `VERBOSE=1` adds state/history/window details for
+collection diagnosis. Output is ANSI-colored on a terminal and plain when
+redirected or when `NO_COLOR` is set. See the
+[status output reference](status-output-reference.md) for the complete state and
+field contract.
 
 ## Open edge cases
 
@@ -110,10 +118,10 @@ see [requirements spec](requirements-spec.md) for tracking.
 - **Shutdown / poweroff mid-session.** No flush-on-shutdown path exists. On
   restart, a gap over 90 seconds produces `> X`; transitions that happened
   while the tracker was stopped cannot be reconstructed.
-- **Last battery removed at runtime.** The tracker already reports a
-  battery removed mid-session (see the notifications doc), but full
-  desktop-mode fallback — no battery present at all after boot — is only
-  handled at install-time preflight, not at runtime.
+- **Last battery removed at runtime.** Status suppresses stale runtime when no
+  present battery remains, and notifications report a mid-session removal.
+  The panel's full desktop-mode fallback after the final runtime removal still
+  needs real-hardware verification.
 
 Each of these is a data-consistency question: does the state file, on the
 next observation, correctly distinguish "stale from a gap" from "a real
