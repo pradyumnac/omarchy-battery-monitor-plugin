@@ -158,20 +158,22 @@ prune_history() {
 
 compute_usual_runtime() {
   local history_file="$state_dir/discharge-history.tsv"
-  local line epoch session draw historical_capacity
-  local current_capacity median left right draw_count=0 session_count=0
+  local epoch session draw _historical_capacity
+  local median left right draw_count=0 session_count=0
   local model_cutoff=$((now - 30 * 24 * 60 * 60))
   local -a draws=()
   local -A sessions=()
 
+  battery_energy_now_uwh=$(capture_energy_now_uwh)
+  battery_usable_capacity_uwh=$(capture_energy_capacity_uwh)
+  usual_remaining_runtime_seconds=0
   usual_full_runtime_seconds=0
   usual_sample_count=0
   [[ -f "$history_file" ]] || return 0
   history_schema_valid || return 0
-  current_capacity=$(capture_energy_capacity_uwh)
-  ((current_capacity > 0)) || return 0
+  ((battery_usable_capacity_uwh > 0)) || return 0
 
-  while IFS=$'\t' read -r epoch session draw historical_capacity; do
+  while IFS=$'\t' read -r epoch session draw _historical_capacity; do
     [[ "$epoch" =~ ^[0-9]+$ && "$epoch" -ge "$model_cutoff" && -n "$session" && "$draw" =~ ^[1-9][0-9]*$ ]] || continue
     draws+=("$draw")
     ((draw_count += 1))
@@ -191,8 +193,11 @@ compute_usual_runtime() {
     median=$(((left + right) / 2))
   fi
   ((median > 0)) || return 0
-  # capacity is µWh and draw is mW; divide by 1000 to convert milli-hours.
-  usual_full_runtime_seconds=$(((current_capacity * 3600 + median * 500) / (median * 1000)))
+  # Energy is µWh and draw is mW; divide by 1000 to convert milli-hours.
+  usual_full_runtime_seconds=$(((battery_usable_capacity_uwh * 3600 + median * 500) / (median * 1000)))
+  if ((battery_energy_now_uwh > 0)); then
+    usual_remaining_runtime_seconds=$(((battery_energy_now_uwh * 3600 + median * 500) / (median * 1000)))
+  fi
   usual_sample_count=$draw_count
 }
 
@@ -477,6 +482,9 @@ tmp_file="$state_file.tmp.$$"
   printf 'last_observed=%q\n' "$now"
   printf 'charge_start_levels=%q\n' "$charge_start_levels"
   printf 'charge_session_valid=%q\n' "$charge_session_valid"
+  printf 'battery_energy_now_uwh=%q\n' "$battery_energy_now_uwh"
+  printf 'battery_usable_capacity_uwh=%q\n' "$battery_usable_capacity_uwh"
+  printf 'usual_remaining_runtime_seconds=%q\n' "$usual_remaining_runtime_seconds"
   printf 'usual_full_runtime_seconds=%q\n' "$usual_full_runtime_seconds"
   printf 'usual_sample_count=%q\n' "$usual_sample_count"
   printf 'discharge_session_id=%q\n' "$discharge_session_id"

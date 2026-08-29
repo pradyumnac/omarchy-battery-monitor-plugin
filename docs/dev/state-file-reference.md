@@ -23,7 +23,10 @@ write on power events. The panel reads it every refresh.
 | `last_observed` | Time of the last successful poll | Detects a clock reversal or a gap over 90s |
 | `charge_start_levels` | Per-battery percentage at charge start | Produces one start-to-end row per battery on unplug |
 | `charge_session_valid` | Whether continuity and the start snapshot are reliable | Blocks an invented duration or delta |
-| `usual_full_runtime_seconds` | Current-capacity projection from the recent median discharge draw, or `0` | Panel's `≈ Usual` value |
+| `battery_energy_now_uwh` | Aggregate energy currently stored in present batteries, or `0` | Remaining-runtime projection and diagnostics |
+| `battery_usable_capacity_uwh` | Aggregate current full usable capacity, or `0` | Peak/full-runtime diagnostics |
+| `usual_remaining_runtime_seconds` | Current stored-energy projection from the recent median discharge draw, or `0` | Panel's `≈ Usual` value |
+| `usual_full_runtime_seconds` | Full usable-capacity projection from the same model, or `0` | `make status` peak-runtime diagnostic |
 | `usual_sample_count` | Number of recent valid windows used by the projection | Confidence/debugging |
 | `discharge_session_id` | Identifier for the active continuous discharge session | Groups runtime observations |
 | `window_start_epoch` | Start of the active 15-minute energy window | Builds a discharge observation |

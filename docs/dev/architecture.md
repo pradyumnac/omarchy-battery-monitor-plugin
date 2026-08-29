@@ -69,9 +69,10 @@ changes invalidate only the active window.
 
 The model retains up to 96 valid windows for 180 days, but calculates `Usual`
 from only the most recent 30 days. It requires 12 windows across 3 discharge
-sessions and uses the median draw, then projects from the battery's current
-usable capacity. Thus `Usual` is a full-charge active-runtime estimate that
-adapts to battery health and recent usage.
+sessions and uses the median draw. The panel's `Usual` value projects from
+energy currently stored, so it decreases with charge level. `make status`
+also projects from current full usable capacity as an expected-runtime-at-peak
+diagnostic. Both adapt to battery health and recent usage.
 
 ## Two scripts, one state file
 
@@ -91,8 +92,10 @@ sections: systemd details for the monitor and poller, the raw tracker state,
 and interpreted battery-intelligence progress/history. `Usual readiness`
 reflects the model gate with capped `X/12 windows` and `Y/3 recent sessions`
 counters; only windows and distinct sessions from the most recent 30 days
-count. Output is ANSI-colored when attached to a terminal and plain when
-redirected or when `NO_COLOR` is set; `BATTERY_STATUS_COLOR=always` forces
+count. The report separates current stored energy and usual remaining runtime
+from observed peak capacity and expected runtime at that peak. Output is
+ANSI-colored when attached to a terminal and plain when redirected or when
+`NO_COLOR` is set; `BATTERY_STATUS_COLOR=always` forces
 ANSI output for redirected reports. `scripts/battery-intelligence-status.sh`
 is an internal renderer for the last section, not a separate user-facing Make
 target.

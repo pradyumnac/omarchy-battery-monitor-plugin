@@ -79,6 +79,9 @@ test("computes usual full runtime from seeded discharge history", () => {
     ]);
 
     const state = runTracker(f, { BATTERY_SESSION_NOW: "2000" });
+    assert.match(state, /^battery_energy_now_uwh=40000000$/m);
+    assert.match(state, /^battery_usable_capacity_uwh=50000000$/m);
+    assert.match(state, /^usual_remaining_runtime_seconds=14400$/m);
     assert.match(state, /^usual_full_runtime_seconds=18000$/m);
     assert.match(state, /^usual_sample_count=12$/m);
   } finally {

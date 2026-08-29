@@ -39,7 +39,7 @@ This doc is the single source of pending work. GitHub issues are archived
 | Unknown uninstall options fail before removing files | `tests/uninstall.test.js` |
 | Install and both uninstall targets perform a full shell restart | `tests/uninstall.test.js` |
 | Install refuses on a machine with no battery | `tests/preflight.test.js` |
-| Seeded history produces a current-capacity `Usual` runtime | `tests/tracker.test.js` |
+| Seeded history produces current-energy and peak-capacity runtime projections | `tests/tracker.test.js` |
 | A valid 15-minute discharge window is recorded | `tests/tracker.test.js` |
 | Recent median ignores outliers and older back-reference data | `tests/tracker.test.js` |
 | History is bounded to 96 rows and 180 days | `tests/tracker.test.js` |
@@ -65,7 +65,8 @@ This doc is the single source of pending work. GitHub issues are archived
 - [ ] Repeat with one battery absent, and with a charge threshold active.
 - [ ] Confirm repeated polls create no duplicate notification.
 - [ ] Confirm an unknown session shows current facts, not an invented delta.
-- [ ] After enough real use, confirm a full battery shows `≈ Usual` as active runtime.
+- [ ] After enough real use, confirm `≈ Usual` decreases with stored energy and is plausible as remaining active runtime.
+- [ ] Confirm `make status` reports the longer full/peak runtime separately.
 - [ ] Confirm suspend/gaps do not inflate `Usual`.
 - [ ] Run `make status` and confirm all three separated sections are readable,
       semantic states are color-coded, `Usual readiness` shows both `X/12`

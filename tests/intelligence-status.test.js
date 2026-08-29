@@ -39,6 +39,9 @@ test("reports model readiness, active window, and recorded history", () => {
     fs.writeFileSync(
       path.join(stateDir, "state"),
       [
+        "battery_energy_now_uwh=40000000",
+        "battery_usable_capacity_uwh=50000000",
+        "usual_remaining_runtime_seconds=14400",
         "usual_full_runtime_seconds=18000",
         "usual_sample_count=12",
         "discharge_session_id=19999000",
@@ -55,7 +58,9 @@ test("reports model readiness, active window, and recorded history", () => {
         ...Array.from(
           { length: 12 },
           (_, index) =>
-            `${19999900 + index}\tsession-${index % 3}\t${10000 + index * 100}\t50000000`,
+            `${19999900 + index}\tsession-${index % 3}\t${
+              10000 + index * 100
+            }\t50000000`,
         ),
       ].join("\n") + "\n",
     );
@@ -68,7 +73,13 @@ test("reports model readiness, active window, and recorded history", () => {
       result.stdout,
       /Usual readiness: ready \(12\/12 windows, 3\/3 sessions\)/,
     );
-    assert.match(result.stdout, /Usual full runtime: 5h/);
+    assert.match(result.stdout, /Current stored energy: 40\.0 Wh \/ 50\.0 Wh/);
+    assert.match(
+      result.stdout,
+      /Observed peak capacity: 50\.0 Wh \(12 observations\)/,
+    );
+    assert.match(result.stdout, /Usual remaining runtime: 4h/);
+    assert.match(result.stdout, /Expected runtime at peak: 5h/);
     assert.match(result.stdout, /Active window: 50% \(8m \/ 15m\)/);
     assert.match(
       result.stdout,
@@ -146,6 +157,10 @@ test("make status combines service, tracker, and intelligence sections", () => {
       result.stdout,
       /BATTERY INTELLIGENCE[\s\S]*Usual readiness: learning \(0\/12 windows, 0\/3 sessions\)/,
     );
+    assert.match(
+      result.stdout,
+      /BATTERY INTELLIGENCE[\s\S]*Observed peak capacity: not available/,
+    );
     assert.equal(result.stdout.includes(ansi), false);
     assert.equal(colored.status, 0, colored.stderr);
     assert.equal(
@@ -170,6 +185,10 @@ test("reports learning state before any observations", () => {
       result.stdout,
       /Usual readiness: waiting for first tracker poll \(0\/12 windows, 0\/3 sessions\)/,
     );
+    assert.match(result.stdout, /Current stored energy: not available/);
+    assert.match(result.stdout, /Observed peak capacity: not available/);
+    assert.match(result.stdout, /Usual remaining runtime: not ready/);
+    assert.match(result.stdout, /Expected runtime at peak: not ready/);
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }

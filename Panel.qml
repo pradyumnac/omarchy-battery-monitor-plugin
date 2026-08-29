@@ -18,7 +18,7 @@ Panel {
   property real uptimeSeconds: 0
   property real nowEpochSeconds: Date.now() / 1000
   readonly property string systemUptimeStr: Model.formatElapsed(root.uptimeSeconds)
-  readonly property string usualRuntimeStr: Model.formatRuntimeEstimate(root.chargeHistory.usualFullRuntimeSeconds)
+  readonly property string usualRuntimeStr: Model.formatRuntimeEstimate(root.chargeHistory.usualRemainingRuntimeSeconds)
   readonly property bool usualRuntimeAvailable: usualRuntimeStr !== ""
   readonly property string sinceChargeStr: {
     var start = Number(root.chargeHistory.stateStartEpoch || 0)
@@ -198,6 +198,7 @@ Panel {
       stateStartAtLeast: Number(next.state_since_at_least || 0) === 1,
       chargeStartEpoch: Number(next.last_charge_start || 0),
       chargeEndEpoch: Number(next.last_charge_end || 0),
+      usualRemainingRuntimeSeconds: Number(next.usual_remaining_runtime_seconds || 0),
       usualFullRuntimeSeconds: Number(next.usual_full_runtime_seconds || 0),
       usualSampleCount: Number(next.usual_sample_count || 0),
       state: next.previous_state || ""

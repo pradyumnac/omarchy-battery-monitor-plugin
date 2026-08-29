@@ -77,6 +77,32 @@ format_power() {
   awk -v value="$1" 'BEGIN { printf "%.1f W", value / 1000 }'
 }
 
+compute_observed_peak_capacity() {
+  observed_peak_capacity_uwh=0
+  observed_peak_capacity_samples=0
+  [[ -f "$history_file" ]] || return 0
+
+  # Each history row captures the kernel's usable full-capacity value at the
+  # end of a valid discharge window. Use their recent median as the observed
+  # peak-capacity diagnostic rather than trusting one kernel reading.
+  mapfile -t observed_peak_capacities < <(
+    awk -F '\t' -v now="$now" '
+      BEGIN { cutoff = now - 30 * 24 * 60 * 60 }
+      $1 ~ /^[0-9]+$/ && $1 >= cutoff && $2 != "" &&
+        $3 ~ /^[1-9][0-9]*$/ && $4 ~ /^[1-9][0-9]*$/ { print $4 }
+    ' "$history_file" | sort -n
+  )
+  observed_peak_capacity_samples=${#observed_peak_capacities[@]}
+  ((observed_peak_capacity_samples > 0)) || return 0
+  local middle=$((observed_peak_capacity_samples / 2))
+  if ((observed_peak_capacity_samples % 2 == 1)); then
+    observed_peak_capacity_uwh=${observed_peak_capacities[$middle]}
+  else
+    observed_peak_capacity_uwh=$(((\
+      observed_peak_capacities[middle - 1] + observed_peak_capacities[middle]) / 2))
+  fi
+}
+
 service_state() {
   local unit=$1
   if command -v -- "$systemctl_command" >/dev/null 2>&1 &&
@@ -125,6 +151,7 @@ session_progress=$sessions
 ((window_progress > 12)) && window_progress=12
 ((session_progress > 3)) && session_progress=3
 readiness_progress="$window_progress/12 windows, $session_progress/3 sessions"
+compute_observed_peak_capacity
 
 render_history() {
   if [[ -f "$history_file" ]]; then
@@ -143,27 +170,54 @@ render_history() {
 
 if [[ ! -f "$state_file" ]]; then
   field "Usual readiness" "waiting for first tracker poll ($readiness_progress)" "$yellow"
-  field "Usual full runtime" "not ready" "$yellow"
+  field "Current stored energy" "not available" "$dim"
+  field "Observed peak capacity" "not available" "$dim"
+  field "Usual remaining runtime" "not ready" "$yellow"
+  field "Expected runtime at peak" "not ready" "$yellow"
   render_history
   exit 0
 fi
 
-usual=$(value usual_full_runtime_seconds "$state_file")
+usual_remaining=$(value usual_remaining_runtime_seconds "$state_file")
+usual_full=$(value usual_full_runtime_seconds "$state_file")
+current_energy=$(value battery_energy_now_uwh "$state_file")
+current_capacity=$(value battery_usable_capacity_uwh "$state_file")
 session=$(value discharge_session_id "$state_file")
 window_start=$(value window_start_epoch "$state_file")
 window_energy=$(value window_start_energy_uwh "$state_file")
 last_energy=$(value last_sample_energy_uwh "$state_file")
 fingerprint=$(value battery_fingerprint "$state_file")
 
-if [[ "$usual" =~ ^[1-9][0-9]*$ ]]; then
+if [[ "$usual_remaining" =~ ^[1-9][0-9]*$ ]]; then
   field "Usual readiness" "ready ($readiness_progress)" "$green"
-  field "Usual full runtime" "$(format_duration "$usual")" "$green"
-elif ((recent >= 12 && sessions >= 3)); then
-  field "Usual readiness" "waiting for usable capacity ($readiness_progress)" "$yellow"
-  field "Usual full runtime" "not ready" "$yellow"
 else
   field "Usual readiness" "learning ($readiness_progress)" "$yellow"
-  field "Usual full runtime" "not ready" "$yellow"
+fi
+if [[ "$current_energy" =~ ^[1-9][0-9]*$ ]]; then
+  if [[ "$current_capacity" =~ ^[1-9][0-9]*$ ]]; then
+    field "Current stored energy" "$(format_energy "$current_energy") / $(format_energy "$current_capacity")"
+  else
+    field "Current stored energy" "$(format_energy "$current_energy")"
+  fi
+else
+  field "Current stored energy" "not available" "$dim"
+fi
+if ((observed_peak_capacity_uwh > 0)); then
+  field "Observed peak capacity" "$(format_energy "$observed_peak_capacity_uwh") ($observed_peak_capacity_samples observations)" "$dim"
+elif [[ "$current_capacity" =~ ^[1-9][0-9]*$ ]]; then
+  field "Observed peak capacity" "$(format_energy "$current_capacity") (current reading)" "$dim"
+else
+  field "Observed peak capacity" "not available" "$dim"
+fi
+if [[ "$usual_remaining" =~ ^[1-9][0-9]*$ ]]; then
+  field "Usual remaining runtime" "$(format_duration "$usual_remaining")" "$green"
+else
+  field "Usual remaining runtime" "not ready" "$yellow"
+fi
+if [[ "$usual_full" =~ ^[1-9][0-9]*$ ]]; then
+  field "Expected runtime at peak" "$(format_duration "$usual_full")" "$dim"
+else
+  field "Expected runtime at peak" "not ready" "$yellow"
 fi
 
 if [[ "$window_start" =~ ^[1-9][0-9]*$ && "$now" =~ ^[0-9]+$ ]]; then
