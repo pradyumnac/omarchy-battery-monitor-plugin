@@ -131,6 +131,17 @@ Panel {
     return root.bar ? root.bar.foreground : Color.foreground
   }
 
+  // Maps Model.deviceStateSeverity() onto colors. The neutral and critical
+  // steps follow the Omarchy theme; the palette exposes no low/held/full
+  // equivalents, so those three keep literal colors.
+  function severityColor(severity) {
+    if (severity === "critical") return Color.urgent
+    if (severity === "low") return "#eab308"
+    if (severity === "held") return "#f97316"
+    if (severity === "full") return "#22c55e"
+    return root.batteryFillColor
+  }
+
   // Cute agent-flavored phrases shown in the hero status line, rotated on a
   // timer so the panel feels alive when current is flowing (either direction).
   readonly property var chargingPhrases: [
@@ -619,10 +630,8 @@ Panel {
                 return v || m
               }
               readonly property string stateIcon: Model.deviceStateIcon(modelData, root.upowerStates())
-              readonly property bool stateIconThresholdActive: extra.status === "Not charging"
-                && extra.endThreshold > 0 && extra.percentage >= extra.endThreshold
-              readonly property color stateIconColor: Model.deviceStateIconColor(
-                modelData, stateIconThresholdActive, root.upowerStates())
+              readonly property color stateIconColor: root.severityColor(
+                Model.deviceStateSeverity(modelData, extra, root.upowerStates()))
               readonly property string rateStr: modelData.changeRate > 0.05 ? " (" + modelData.changeRate.toFixed(1) + "W)" : ""
               readonly property string healthStr: {
                 if (!modelData.healthSupported || modelData.healthPercentage <= 0) {

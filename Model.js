@@ -117,14 +117,29 @@ function deviceStateIcon(device, states) {
   return "󰁹";
 }
 
-function deviceStateIconColor(device, thresholdActive, states) {
+// sysfs reports a battery parked at its charge-stop threshold as "Not
+// charging". UPower has no equivalent field, so this is the sysfs counterpart
+// of chargeThresholdActive() rather than a duplicate of it.
+function sysfsThresholdActive(extra) {
+  var e = extra || {};
+  return (
+    e.status === "Not charging" &&
+    Number(e.endThreshold) > 0 &&
+    Number(e.percentage) >= Number(e.endThreshold)
+  );
+}
+
+// Severity token for one battery's state icon. Panel.qml maps these onto theme
+// colors; keeping the model free of literal colors lets the neutral step follow
+// the active Omarchy theme.
+function deviceStateSeverity(device, extra, states) {
   var fraction = batteryFraction(device);
   var s = states || {};
-  if ((device && device.state === s.Empty) || fraction < 0.05) return "#ef4444";
-  if (fraction < 0.2) return "#eab308";
-  if (thresholdActive) return "#f97316";
-  if (device && device.state === s.FullyCharged) return "#22c55e";
-  return "white";
+  if ((device && device.state === s.Empty) || fraction < 0.05) return "critical";
+  if (fraction < 0.2) return "low";
+  if (sysfsThresholdActive(extra)) return "held";
+  if (device && device.state === s.FullyCharged) return "full";
+  return "normal";
 }
 
 function deviceBatteryIcon(device, states) {
@@ -321,7 +336,8 @@ if (typeof module === "object" && module !== null) {
     modeLabel: modeLabel,
     deviceStateString: deviceStateString,
     deviceStateIcon: deviceStateIcon,
-    deviceStateIconColor: deviceStateIconColor,
+    sysfsThresholdActive: sysfsThresholdActive,
+    deviceStateSeverity: deviceStateSeverity,
     deviceBatteryIcon: deviceBatteryIcon,
     getLaptopBatteries: getLaptopBatteries,
     totalEnergy: totalEnergy,

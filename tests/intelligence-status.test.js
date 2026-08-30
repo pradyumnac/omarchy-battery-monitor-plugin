@@ -81,14 +81,27 @@ function writeHistory(
   );
 }
 
-function writeBatteries(stateDir, statuses) {
+// Each entry is a status string, or an object that also sets the battery name
+// and the sysfs energy/power files the per-battery summary reads.
+function writeBatteries(stateDir, batteries) {
   const powerRoot = path.join(stateDir, "power-supply");
   fs.mkdirSync(powerRoot, { recursive: true });
-  statuses.forEach((status, index) => {
-    const battery = path.join(powerRoot, `BAT${index}`);
+  batteries.forEach((entry, index) => {
+    const spec = typeof entry === "string" ? { status: entry } : entry;
+    const battery = path.join(powerRoot, spec.name || `BAT${index}`);
     fs.mkdirSync(battery);
     fs.writeFileSync(path.join(battery, "present"), "1\n");
-    fs.writeFileSync(path.join(battery, "status"), `${status}\n`);
+    fs.writeFileSync(path.join(battery, "status"), `${spec.status}\n`);
+    const optional = {
+      energy_full: spec.energyFull,
+      energy_full_design: spec.energyFullDesign,
+      power_now: spec.powerNow,
+    };
+    Object.entries(optional).forEach(([file, value]) => {
+      if (value !== undefined) {
+        fs.writeFileSync(path.join(battery, file), `${value}\n`);
+      }
+    });
   });
   return powerRoot;
 }
@@ -458,5 +471,60 @@ test("reports waiting state before any observations", () => {
     assert.match(result.stdout, /Model: waiting for first tracker poll/);
     assert.match(result.stdout, /Learning: 0\/12 windows · 0\/3 sessions/);
     assert.equal(result.stdout.includes("Energy:"), false);
+  });
+});
+
+
+test("reports one summary line per present battery, whatever it is named", () => {
+  withFixture("status-per-battery", (stateDir) => {
+    writeState(stateDir);
+    writeHistory(stateDir);
+    const powerRoot = writeBatteries(stateDir, [
+      {
+        name: "BAT1",
+        status: "Discharging",
+        energyFull: 45000000,
+        energyFullDesign: 50000000,
+        powerNow: 10000000,
+      },
+      {
+        name: "BAT2",
+        status: "Charging",
+        energyFull: 20000000,
+        energyFullDesign: 25000000,
+        powerNow: 5000000,
+      },
+    ]);
+
+    const result = runStatus(stateDir, {
+      BATTERY_STATUS_POWER_SUPPLY_ROOT: powerRoot,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stdout,
+      /BAT1: health 90% · 45\.0 Wh · Discharging · draw 10\.0 W/,
+    );
+    assert.match(
+      result.stdout,
+      /BAT2: health 80% · 20\.0 Wh · Charging · charging power 5\.0 W/,
+    );
+    assert.doesNotMatch(result.stdout, /BAT0:/);
+  });
+});
+
+test("a single battery produces no phantom second summary line", () => {
+  withFixture("status-one-battery", (stateDir) => {
+    writeState(stateDir);
+    writeHistory(stateDir);
+    const powerRoot = writeBatteries(stateDir, [
+      { status: "Discharging", energyFull: 45000000, powerNow: 10000000 },
+    ]);
+
+    const result = runStatus(stateDir, {
+      BATTERY_STATUS_POWER_SUPPLY_ROOT: powerRoot,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /BAT0: health N\/A · 45\.0 Wh/);
+    assert.doesNotMatch(result.stdout, /BAT1:/);
   });
 });

@@ -184,6 +184,41 @@ compute_history_stats() {
   fi
 }
 
+# One line per battery: health against design capacity, full-charge energy, and
+# the live power flow while current moves. Reads sysfs directly so the report
+# stays correct on laptops whose battery names are not BAT0/BAT1.
+battery_summary() {
+  awk -v dir="$1" '
+    function read_value(path,   value) {
+      value = ""
+      if ((getline value < path) > 0) {
+        close(path)
+        return value
+      }
+      close(path)
+      return ""
+    }
+    BEGIN {
+      status = read_value(dir "/status")
+      full = read_value(dir "/energy_full") + 0
+      if (full == 0) full = read_value(dir "/charge_full") + 0
+      design = read_value(dir "/energy_full_design") + 0
+      if (design == 0) design = read_value(dir "/charge_full_design") + 0
+      power = read_value(dir "/power_now") + 0
+
+      health = (design > 0 ? sprintf("health %d%%", full * 100 / design) : "health N/A")
+      energy = (full > 0 ? sprintf("%.1f Wh", full / 1000000) : "-")
+      if (status == "Discharging")
+        detail = sprintf("Discharging · draw %.1f W", power / 1000000)
+      else if (status == "Charging")
+        detail = sprintf("Charging · charging power %.1f W", power / 1000000)
+      else
+        detail = ""
+
+      printf "%s · %s%s", health, energy, (detail != "" ? " · " detail : "")
+    }'
+}
+
 inspect_batteries() {
   battery_presence="unknown"
   charge_phase="unknown"
@@ -191,6 +226,7 @@ inspect_batteries() {
   charging_count=0
   full_count=0
   held_count=0
+  present_batteries=()
   [[ -d "$power_supply_root" ]] || return 0
   battery_presence="absent"
 
@@ -204,6 +240,7 @@ inspect_batteries() {
     fi
     battery_presence="present"
     ((battery_count += 1))
+    present_batteries+=("$battery_dir")
     status=""
     [[ -f "$battery_dir/status" ]] && status=$(<"$battery_dir/status")
     case $status in
@@ -250,8 +287,9 @@ fi
 
 compute_history_stats
 inspect_batteries
-field "BAT0" "$(awk -v dir="$power_supply_root/BAT0" 'BEGIN { status=""; if ((getline value < (dir "/status")) > 0) status=value; full=0; if ((getline value < (dir "/energy_full")) > 0) full=value; if (full == 0 && (getline value < (dir "/charge_full")) > 0) full=value; design=0; if ((getline value < (dir "/energy_full_design")) > 0) design=value; if (design == 0 && (getline value < (dir "/charge_full_design")) > 0) design=value; power=0; if ((getline value < (dir "/power_now")) > 0) power=value; health=(design > 0 ? sprintf("health %d%%", full * 100 / design) : "health N/A"); energy=(full > 0 ? sprintf("%.1f Wh", full / 1000000) : "-"); if (status == "Discharging") detail=sprintf("Discharging · draw %.1f W", power / 1000000); else if (status == "Charging") detail=sprintf("Charging · charging power %.1f W", power / 1000000); else detail=""; printf "%s · %s%s", health, energy, (detail != "" ? " · " detail : "") }')"
-field "BAT1" "$(awk -v dir="$power_supply_root/BAT1" 'BEGIN { status=""; if ((getline value < (dir "/status")) > 0) status=value; full=0; if ((getline value < (dir "/energy_full")) > 0) full=value; if (full == 0 && (getline value < (dir "/charge_full")) > 0) full=value; design=0; if ((getline value < (dir "/energy_full_design")) > 0) design=value; if (design == 0 && (getline value < (dir "/charge_full_design")) > 0) design=value; power=0; if ((getline value < (dir "/power_now")) > 0) power=value; health=(design > 0 ? sprintf("health %d%%", full * 100 / design) : "health N/A"); energy=(full > 0 ? sprintf("%.1f Wh", full / 1000000) : "-"); if (status == "Discharging") detail=sprintf("Discharging · draw %.1f W", power / 1000000); else if (status == "Charging") detail=sprintf("Charging · charging power %.1f W", power / 1000000); else detail=""; printf "%s · %s%s", health, energy, (detail != "" ? " · " detail : "") }')"
+for battery_dir in "${present_batteries[@]}"; do
+  field "${battery_dir##*/}" "$(battery_summary "$battery_dir")"
+done
 window_progress=$recent
 session_progress=$sessions
 ((window_progress > 12)) && window_progress=12

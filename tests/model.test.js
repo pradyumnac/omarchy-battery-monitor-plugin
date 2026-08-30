@@ -102,3 +102,59 @@ test("formats a usual full-runtime estimate", () => {
   assert.equal(Model.formatRuntimeEstimate(0), "");
   assert.equal(Model.formatRuntimeEstimate("invalid"), "");
 });
+
+test("sysfs threshold hold needs a reached stop threshold", () => {
+  const held = { status: "Not charging", endThreshold: 80, percentage: 80 };
+  assert.equal(Model.sysfsThresholdActive(held), true);
+  assert.equal(Model.sysfsThresholdActive({ ...held, percentage: 60 }), false);
+  assert.equal(Model.sysfsThresholdActive({ ...held, endThreshold: 0 }), false);
+  assert.equal(
+    Model.sysfsThresholdActive({ ...held, status: "Discharging" }),
+    false,
+  );
+  assert.equal(Model.sysfsThresholdActive(undefined), false);
+});
+
+test("state icon severity ranks charge level above threshold and full", () => {
+  const states = {
+    Charging: 1,
+    Discharging: 2,
+    FullyCharged: 3,
+    Empty: 6,
+  };
+  const held = { status: "Not charging", endThreshold: 80, percentage: 80 };
+  function severity(device, extra) {
+    return Model.deviceStateSeverity(device, extra, states);
+  }
+  assert.equal(
+    severity({ isPresent: true, percentage: 0.02, state: states.Discharging }),
+    "critical",
+  );
+  assert.equal(
+    severity({ isPresent: true, percentage: 0.5, state: states.Empty }),
+    "critical",
+  );
+  assert.equal(
+    severity({ isPresent: true, percentage: 0.1, state: states.Discharging }),
+    "low",
+  );
+  assert.equal(
+    severity({ isPresent: true, percentage: 0.8, state: states.Charging }, held),
+    "held",
+  );
+  assert.equal(
+    severity(
+      { isPresent: true, percentage: 0.8, state: states.FullyCharged },
+      held,
+    ),
+    "held",
+  );
+  assert.equal(
+    severity({ isPresent: true, percentage: 1, state: states.FullyCharged }),
+    "full",
+  );
+  assert.equal(
+    severity({ isPresent: true, percentage: 0.6, state: states.Discharging }),
+    "normal",
+  );
+});

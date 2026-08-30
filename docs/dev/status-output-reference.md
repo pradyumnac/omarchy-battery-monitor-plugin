@@ -23,6 +23,7 @@ there is no separate user-facing intelligence target.
 | Tracker `state`                       | Power session, current/full energy, runtime projections, freshness, active window, reset reason |
 | `discharge-history.tsv`               | Recent/archived counts, distinct sessions, median draw/capacity, last learned time              |
 | `/sys/class/power_supply/BAT*/status` | Distinguishes charging, full, and charge-threshold hold; detects no present battery             |
+| `/sys/class/power_supply/BAT*/energy_full`, `energy_full_design`, `power_now` | Per-battery health, full-charge energy, and live power flow (`charge_*` files are the fallback) |
 
 Tests can override the last source with `BATTERY_STATUS_POWER_SUPPLY_ROOT`.
 
@@ -33,6 +34,7 @@ Fields are conditional; absent information is not printed as a misleading zero.
 | Field              | When shown                                  | Meaning                                                                                      |
 | ------------------ | ------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `Services`         | Always                                      | `healthy`, or individual tracker/monitor states                                              |
+| `BAT*` directory name | One line for each present battery        | Health against design capacity, full-charge energy, and the live power flow while current moves |
 | `Battery`          | No present battery                          | Runtime state is suppressed because persisted data may be stale                              |
 | `Power`            | State exists                                | On battery, charging, full, held, or generically plugged; includes observed session duration |
 | `Energy`           | State exists                                | Current aggregate energy / current full usable capacity and derived percentage               |

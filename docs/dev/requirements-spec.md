@@ -56,6 +56,9 @@ This doc is the single source of pending work. GitHub issues are archived
 | `VERBOSE=1` adds collection diagnostics without changing the concise default | `tests/intelligence-status.test.js` |
 | Status colors can be forced or disabled for noninteractive output | `tests/intelligence-status.test.js` |
 | Model learning reports capped 12-window and 3-session progress | `tests/intelligence-status.test.js` |
+| One health and power summary line for each present battery, whatever it is named | `tests/intelligence-status.test.js` |
+| Charge-threshold hold read from sysfs status and stop threshold | `tests/model.test.js` |
+| State icon severity ranks charge level above threshold hold and full charge | `tests/model.test.js` |
 
 ## Manual check before a release
 

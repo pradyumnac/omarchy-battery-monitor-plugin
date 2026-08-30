@@ -17,6 +17,8 @@ A healthy discharging system looks like:
 BATTERY STATUS
 ────────────────────────────────────────
   Services: healthy
+  BAT0: health 91% · 24.0 Wh · Discharging · draw 6.1 W
+  BAT1: health 88% · 13.2 Wh
   Power: on battery · 1h 2m
   Energy: 10.1 Wh / 37.2 Wh · 27%
   Model: ready · 18 windows / 3 sessions · learned 4m ago
@@ -29,6 +31,11 @@ BATTERY STATUS
 `Usual remaining` answers how long the currently stored energy normally lasts.
 `At full` is the same learned workload projected from full usable capacity.
 
+The report prints one line for each present battery. The line gives the health
+against the design capacity, the full-charge energy, and the live power flow
+while current moves. The line name is the sysfs directory name, so a laptop
+with other battery names shows those names.
+
 ## Read physical-battery state icons
 
 Each physical battery has one state icon in its health row. The glyph shows the
@@ -36,7 +43,7 @@ battery state. The icon colour shows that battery's charge level.
 
 | Condition | Glyph | Colour |
 | --- | --- | --- |
-| State is unknown, missing, or unsupported | Exclamation | Charge-level colour, or white when the percentage is missing |
+| State is unknown, missing, or unsupported | Exclamation | Charge-level colour, or the theme foreground when the percentage is missing |
 | Charging | Lightning | Charge-level colour |
 | Discharging | Down arrow | Charge-level colour |
 | Charge threshold holds the battery | Battery | Orange |
@@ -45,9 +52,10 @@ battery state. The icon colour shows that battery's charge level.
 | Any other known state | Battery | Charge-level colour |
 
 The colour order is: empty or less than 5% is red; 5% through 19% is yellow;
-a threshold hold is orange; full charge is green; all other levels are white.
-A threshold hold takes priority over full charge. Each battery uses its own
-state, percentage, and threshold status.
+a threshold hold is orange; full charge is green; all other levels use the
+theme foreground colour. Red and the foreground colour follow the active
+Omarchy theme. A threshold hold takes priority over full charge. Each battery
+uses its own state, percentage, and threshold status.
 
 ## Follow the lifecycle state
 
