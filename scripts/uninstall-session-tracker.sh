@@ -29,6 +29,8 @@ remove_path() {
 
 scripts_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source_dir="$(dirname "$scripts_source")"
+# shellcheck source=plugin-files.sh
+source "$scripts_source/plugin-files.sh"
 
 account_home=$(getent passwd "$(id -u)" | cut -d: -f6)
 [[ -n $account_home ]] || {
@@ -78,8 +80,7 @@ systemctl --user reset-failed \
 # checkout was copied into the plugin dir rather than running from it
 # directly (the same guard install-session-tracker uses before copying).
 if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
-  plugin_files=(Panel.qml Model.js manifest.json README.md LICENSE AGENTS.md)
-  for name in "${plugin_files[@]}"; do
+  for name in "${plugin_root_files[@]}"; do
     remove_path "$plugin_dir/$name"
   done
   remove_path "$plugin_dir/scripts"

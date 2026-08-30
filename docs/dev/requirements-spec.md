@@ -14,7 +14,7 @@ This doc is the single source of pending work. GitHub issues are archived
 | Battery-to-charge transition | `tests/tracker.test.js` |
 | Charge-to-battery transition | `tests/tracker.test.js` |
 | Reconnect clears `last_charge_end` | `tests/tracker.test.js` |
-| Same-state gap over 90 seconds starts a lower-bound session | `tests/tracker.test.js` |
+| Same-state gap beyond the poll tolerance starts a lower-bound session | `tests/tracker.test.js` |
 | Initial or recovered unknown session start sets `state_since_at_least=1` | `tests/tracker.test.js` |
 | Real power transition clears `state_since_at_least` | `tests/tracker.test.js` |
 | Lower-bound duration renders as `> X`, rounded down | `tests/model.test.js` |

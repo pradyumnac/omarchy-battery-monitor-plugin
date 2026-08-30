@@ -13,6 +13,9 @@ scripts_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source_dir="$(dirname "$scripts_source")"
 service_source="$source_dir/service"
 
+# shellcheck source=plugin-files.sh
+source "$scripts_source/plugin-files.sh"
+
 "$scripts_source/battery-session-preflight.sh"
 
 account_home=$(getent passwd "$(id -u)" | cut -d: -f6)
@@ -40,41 +43,24 @@ log_write "$plugin_dir/service/"
 # Copy a standalone checkout into the standard Omarchy plugin location. If
 # the checkout is already installed there, avoid copying files onto itself.
 if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
-  plugin_files=(Panel.qml Model.js manifest.json README.md LICENSE)
-  for name in "${plugin_files[@]}"; do
+  for name in "${plugin_root_files[@]}"; do
     cp -a -- "$source_dir/$name" "$plugin_dir/"
     log_write "$plugin_dir/$name"
   done
 
-  # Lifecycle scripts: run once, by hand or by make.
-  admin_files=(
-    battery-session-preflight.sh
-    install-session-tracker.sh
-    uninstall-session-tracker.sh
-  )
-  for name in "${admin_files[@]}"; do
+  for name in "${plugin_admin_files[@]}"; do
     cp -a -- "$source_dir/scripts/$name" "$plugin_dir/scripts/"
     log_write "$plugin_dir/scripts/$name"
   done
 
-  # Service: the long-running tracker and monitor, plus their units.
-  service_files=(
-    battery-session-tracker.sh
-    battery-session-tracker.service
-    battery-session-tracker.timer
-    battery-session-monitor.sh
-    battery-session-monitor.service
-    power-supply.sh
-  )
-  for name in "${service_files[@]}"; do
+  for name in "${plugin_service_files[@]}"; do
     cp -a -- "$source_dir/service/$name" "$plugin_dir/service/"
     log_write "$plugin_dir/service/$name"
   done
-  chmod +x "$plugin_dir/scripts/battery-session-preflight.sh" \
-    "$plugin_dir/scripts/install-session-tracker.sh" \
-    "$plugin_dir/scripts/uninstall-session-tracker.sh" \
-    "$plugin_dir/service/battery-session-tracker.sh" \
-    "$plugin_dir/service/battery-session-monitor.sh"
+
+  for name in "${plugin_executables[@]}"; do
+    chmod +x "$plugin_dir/$name"
+  done
 fi
 
 ln -sfn "$plugin_dir/service/battery-session-tracker.sh" "$unit_dir/battery-session-tracker.sh"

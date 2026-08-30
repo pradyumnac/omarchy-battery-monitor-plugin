@@ -1,12 +1,12 @@
 # shellcheck disable=all
-.PHONY: check test install uninstall uninstall-purge-data reload restart-shell status preflight doctor
+.PHONY: check test install uninstall uninstall-purge-data reload restart-shell status view backtest benchmark preflight doctor
 
 PLUGIN_DIR ?= $(HOME)/.config/omarchy/plugins/doe.power
 export PLUGIN_DIR
 
 # Syntax and lint checks only. Run `make test` separately for the test suite.
 check:
-	bash -n service/battery-session-tracker.sh service/battery-session-monitor.sh service/power-supply.sh scripts/battery-session-preflight.sh scripts/install-session-tracker.sh scripts/uninstall-session-tracker.sh scripts/battery-intelligence-status.sh
+	bash -n service/battery-session-tracker.sh service/battery-session-monitor.sh service/power-supply.sh service/battery-model.sh service/battery-view.sh scripts/battery-session-preflight.sh scripts/install-session-tracker.sh scripts/uninstall-session-tracker.sh scripts/plugin-files.sh scripts/battery-intelligence-status.sh scripts/battery-backtest.sh
 	# Service executables exist only after `make install`; verify the static timer here.
 	systemd-analyze verify service/battery-session-tracker.timer
 	# The flags below are Qt6-only, so prefer the Qt6 binary explicitly —
@@ -74,6 +74,38 @@ restart-shell:
 # Output is TTY-aware; NO_COLOR disables ANSI styling.
 status:
 	@BATTERY_STATUS_VERBOSE="$${VERBOSE:-0}" scripts/battery-intelligence-status.sh
+
+# Print the aggregated view: the exact JSON document Panel.qml reads. This is
+# the seam — anything the panel or a future widget shows has to appear here.
+view:
+	@service/battery-view.sh
+
+# Score the runtime model against the recorded history. No model change ships
+# without a measurable improvement here; see docs/research/.
+backtest:
+	@scripts/battery-backtest.sh $(HISTORY)
+
+# Measure what this plugin costs the battery it monitors: CPU time charged to
+# each unit, and the exact number of processes one tracker poll forks.
+benchmark:
+	@printf 'Accumulated CPU time per unit\n'
+	@for unit in battery-session-tracker.service battery-session-monitor.service; do \
+		printf '  %-40s %s\n' "$$unit" \
+			"$$(systemctl --user show -p CPUUsageNSec --value $$unit 2>/dev/null || echo 'n/a')"; \
+	done
+	@printf '\nProcesses forked by one tracker poll\n'
+	@if command -v strace >/dev/null 2>&1; then \
+		strace -f -c -e trace=execve service/battery-session-tracker.sh --once 2>&1 \
+			| tail -n 3; \
+	else \
+		echo "  strace not installed; install it for an exact per-run fork count"; \
+	fi
+	@printf '\nProcesses forked by one view read\n'
+	@if command -v strace >/dev/null 2>&1; then \
+		strace -f -c -e trace=execve service/battery-view.sh 2>&1 >/dev/null | tail -n 3; \
+	else \
+		echo "  strace not installed"; \
+	fi
 
 # Check this machine is ready to install, without installing anything.
 preflight:

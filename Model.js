@@ -9,39 +9,158 @@ function selectProfileIndex(index, delta, profiles) {
   return clampIndex(index + delta, values.length);
 }
 
-function parseKeyValue(raw) {
-  var next = {};
-  var lines = String(raw || "").split("\n");
-  for (var i = 0; i < lines.length; i++) {
-    var separator = lines[i].indexOf("\t");
-    var separatorLength = 1;
-    if (separator < 0) {
-      separator = lines[i].indexOf("=");
-    }
-    if (separator <= 0) continue;
-    next[lines[i].slice(0, separator)] = lines[i]
-      .slice(separator + separatorLength)
-      .trim();
-  }
-  return next;
+// --- The aggregated view ---------------------------------------------------
+// service/battery-view.sh is the only wire format this file parses. Every
+// panel field that is not pushed live over D-Bus by UPower comes from one read
+// of that document, so there is one place to add a field and one place to
+// change when the schema moves.
+
+var VIEW_SCHEMA = "battery-view";
+var VIEW_VERSION = 1;
+
+function viewNumber(value) {
+  var number = Number(value);
+  return Number.isFinite(number) ? number : 0;
 }
 
-function parseProfiles(raw, previousIndex) {
-  var lines = String(raw || "").split("\n");
-  var list = [];
-  var active = "";
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i].trim();
-    if (!line) continue;
-    var parts = line.split("\t");
-    list.push(parts[0]);
-    if (parts[1] === "1") active = parts[0];
-  }
+// An all-defaults view. Bindings read the same shape whether or not a document
+// has arrived yet, so no panel field has to guard for undefined.
+function emptyView() {
   return {
-    profiles: list,
-    activeProfile: active,
-    profileIndex: clampIndex(previousIndex || 0, list.length),
+    available: false,
+    version: 0,
+    generatedEpoch: 0,
+    powerState: "",
+    powerPhase: "unknown",
+    acOnline: false,
+    sysfsAvailable: false,
+    stateSinceEpoch: 0,
+    stateSinceAtLeast: false,
+    chargeStartEpoch: 0,
+    chargeEndEpoch: 0,
+    energyNowUwh: 0,
+    energyCapacityUwh: 0,
+    energyPercent: -1,
+    drawMw: 0,
+    chargeLimitPercent: 0,
+    liveTimeSeconds: 0,
+    modelState: "learning",
+    modelWindows: 0,
+    modelSessions: 0,
+    requiredWindows: 0,
+    requiredSessions: 0,
+    typicalDrawMw: 0,
+    remainingSeconds: 0,
+    fullSeconds: 0,
+    remainingLowSeconds: 0,
+    remainingHighSeconds: 0,
+    recentDrawMw: 0,
+    recentRemainingSeconds: 0,
+    uptimeSeconds: 0,
+    profiles: [],
+    activeProfile: "",
+    batteries: {},
   };
+}
+
+// Parse one view document. Returns null when the payload is missing, not JSON,
+// not a battery view, or from a schema version this panel does not know how to
+// read — the caller keeps its last known good view in every one of those
+// cases, so a transient failure never blanks the panel.
+function parseView(raw) {
+  var parsed = null;
+  try {
+    parsed = JSON.parse(String(raw || ""));
+  } catch (error) {
+    return null;
+  }
+  if (!parsed || parsed.schema !== VIEW_SCHEMA) return null;
+  if (viewNumber(parsed.version) !== VIEW_VERSION) return null;
+
+  var power = parsed.power || {};
+  var energy = parsed.energy || {};
+  var model = parsed.model || {};
+  var profiles = parsed.profiles || {};
+  var system = parsed.system || {};
+
+  var view = emptyView();
+  view.available = true;
+  view.version = viewNumber(parsed.version);
+  view.generatedEpoch = viewNumber(parsed.generated_epoch);
+
+  view.powerState = String(power.state || "");
+  view.powerPhase = String(power.phase || "unknown");
+  view.acOnline = power.ac_online === true;
+  view.sysfsAvailable = power.sysfs_available === true;
+  view.stateSinceEpoch = viewNumber(power.state_since_epoch);
+  view.stateSinceAtLeast = power.state_since_at_least === true;
+  view.chargeStartEpoch = viewNumber(power.charge_start_epoch);
+  view.chargeEndEpoch = viewNumber(power.charge_end_epoch);
+
+  view.energyNowUwh = viewNumber(energy.now_uwh);
+  view.energyCapacityUwh = viewNumber(energy.capacity_uwh);
+  view.energyPercent = viewNumber(energy.percent);
+  view.drawMw = viewNumber(energy.draw_mw);
+  view.chargeLimitPercent = viewNumber(energy.charge_limit_percent);
+  view.liveTimeSeconds = viewNumber(energy.live_time_seconds);
+
+  view.modelState = String(model.state || "learning");
+  view.modelWindows = viewNumber(model.windows);
+  view.modelSessions = viewNumber(model.sessions);
+  view.requiredWindows = viewNumber(model.required_windows);
+  view.requiredSessions = viewNumber(model.required_sessions);
+  view.typicalDrawMw = viewNumber(model.typical_draw_mw);
+  view.remainingSeconds = viewNumber(model.remaining_seconds);
+  view.fullSeconds = viewNumber(model.full_seconds);
+  view.remainingLowSeconds = viewNumber(model.remaining_low_seconds);
+  view.remainingHighSeconds = viewNumber(model.remaining_high_seconds);
+  view.recentDrawMw = viewNumber(model.recent_draw_mw);
+  view.recentRemainingSeconds = viewNumber(model.recent_remaining_seconds);
+
+  view.uptimeSeconds = viewNumber(system.uptime_seconds);
+
+  var available = Array.isArray(profiles.available) ? profiles.available : [];
+  for (var i = 0; i < available.length; i++) {
+    view.profiles.push(String(available[i]));
+  }
+  view.activeProfile = String(profiles.active || "");
+
+  // Keyed by sysfs name, which is what UPower reports as nativePath.
+  var batteries = Array.isArray(parsed.batteries) ? parsed.batteries : [];
+  for (var j = 0; j < batteries.length; j++) {
+    var battery = batteries[j] || {};
+    var name = String(battery.name || "");
+    if (!name) continue;
+    view.batteries[name] = {
+      status: String(battery.status || ""),
+      percentage: viewNumber(battery.percent),
+      cycles: String(battery.cycle_count || ""),
+      model: String(battery.model || ""),
+      vendor: String(battery.vendor || ""),
+      endThreshold: viewNumber(battery.end_threshold_percent),
+    };
+  }
+  return view;
+}
+
+// µWh as the panel writes capacity: whole watt-hours, no unit noise.
+function formatWattHours(microWattHours) {
+  var value = viewNumber(microWattHours);
+  if (!(value > 0)) return "";
+  return Math.round(value / 1000000) + "Wh";
+}
+
+// mW as the panel writes a draw or charge rate.
+function formatWatts(milliWatts) {
+  var value = viewNumber(milliWatts);
+  if (!(value > 0)) return "";
+  return (value / 1000).toFixed(1) + "W";
+}
+
+function formatPercent(value) {
+  var number = viewNumber(value);
+  if (!(number > 0)) return "";
+  return Math.round(number) + "%";
 }
 
 function profileIcon(name) {
@@ -256,60 +375,6 @@ function formatTimestamp(epoch) {
   );
 }
 
-// UPower prints charge history newest-first. The transition from charging to
-// discharging is the end of the most recent charge/discharge session.
-function parseChargeHistory(raw, nowEpoch) {
-  var entries = [];
-  var lines = String(raw || "").split("\n");
-  for (var i = 0; i < lines.length; i++) {
-    var parts = lines[i].trim().split("\t");
-    var epoch = Number(parts[0]);
-    // Ignore stale UPower samples that are in the future after a clock
-    // correction; they must not make a recent discharge look like a charge.
-    var futureLimit =
-      Number(nowEpoch) > 0 ? Number(nowEpoch) + 5 * 60 : Infinity;
-    if (epoch > 0 && epoch <= futureLimit && parts[1]) {
-      entries.push({ epoch: epoch, state: parts[1] });
-    }
-  }
-  // Keep UPower's order: its first entry is the newest sample. This is more
-  // reliable than sorting timestamps because suspend/resume can move the
-  // system clock while the history is being collected.
-  var lastEnd = 0;
-  var stateStart = 0;
-  if (entries.length > 1) {
-    var currentState = entries[0].state;
-    for (var j = 1; j < entries.length; j++) {
-      if (entries[j].state === currentState) continue;
-      stateStart = entries[0].epoch;
-      break;
-    }
-  }
-  for (var k = 0; k + 1 < entries.length; k++) {
-    if (
-      entries[k].state === "discharging" &&
-      entries[k + 1].state === "charging"
-    ) {
-      lastEnd = entries[k].epoch;
-      break;
-    }
-  }
-  return {
-    chargeEndEpoch: lastEnd,
-    stateStartEpoch: stateStart,
-    entries: entries,
-  };
-}
-
-function parseUptime(raw) {
-  var value = parseFloat(
-    String(raw || "")
-      .trim()
-      .split(/\s+/)[0],
-  );
-  return Number.isFinite(value) && value >= 0 ? value : 0;
-}
-
 function formatSessionDuration(seconds, atLeast) {
   var value = Number(seconds || 0);
   if (atLeast) return "> " + formatElapsed(Math.max(0, value));
@@ -327,8 +392,11 @@ if (typeof module === "object" && module !== null) {
   module.exports = {
     clampIndex: clampIndex,
     selectProfileIndex: selectProfileIndex,
-    parseKeyValue: parseKeyValue,
-    parseProfiles: parseProfiles,
+    emptyView: emptyView,
+    parseView: parseView,
+    formatWattHours: formatWattHours,
+    formatWatts: formatWatts,
+    formatPercent: formatPercent,
     profileIcon: profileIcon,
     batteryFraction: batteryFraction,
     chargeThresholdActive: chargeThresholdActive,
@@ -350,7 +418,5 @@ if (typeof module === "object" && module !== null) {
     formatTimestamp: formatTimestamp,
     formatSessionDuration: formatSessionDuration,
     formatRuntimeEstimate: formatRuntimeEstimate,
-    parseChargeHistory: parseChargeHistory,
-    parseUptime: parseUptime,
   };
 }

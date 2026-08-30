@@ -38,13 +38,16 @@ Fields are conditional; absent information is not printed as a misleading zero.
 | `Battery`          | No present battery                          | Runtime state is suppressed because persisted data may be stale                              |
 | `Power`            | State exists                                | On battery, charging, full, held, or generically plugged; includes observed session duration |
 | `Energy`           | State exists                                | Current aggregate energy / current full usable capacity and derived percentage               |
-| `Model`            | Always after state/history inspection       | `waiting`, `learning`, `ready`, `blocked`, or `unavailable`                                  |
+| `Model`            | Always after state/history inspection       | `waiting`, `learning`, `provisional`, `ready`, `blocked`, or `unavailable`                    |
+| `Confidence`       | Model provisional                           | Says the estimate is low-confidence and how much evidence is still missing                    |
 | `Evidence`         | Model blocked after its gate                | Recent windows and sessions prove learning is complete                                       |
 | `Usual remaining`  | Ready and discharging                       | Current stored energy / learned median draw                                                  |
 | `If unplugged now` | Ready and plugged below full                | The same current-energy projection, labelled for charging context                            |
 | `At full`          | Ready below full                            | Full usable capacity / learned median draw                                                   |
 | `Usual runtime`    | Ready and full                              | Single full runtime; avoids duplicate current/full lines                                     |
-| `Typical draw`     | Ready                                       | Median recent valid-window draw                                                              |
+| `Typical draw`     | Ready or provisional                        | Median recent valid-window draw                                                              |
+| `Range`            | A p25–p75 band is available                 | How wrong the estimate could be; the p75 draw sets the low edge                               |
+| `Right now`        | Recent windows exist                        | Estimate over the newest few windows, which tracks a workload shift within the hour           |
 | `History`          | Archived rows exist                         | Recent versus older retained observations                                                    |
 | `History warning`  | Future-dated rows exist                     | Rows are retained but excluded from learning                                                 |
 | `Sampling`         | Active sampling was reset/paused            | Human label for `window_reset_reason`                                                        |
@@ -59,23 +62,24 @@ The first matching row wins:
 
 | Condition                                           | Model state                                    |
 | --------------------------------------------------- | ---------------------------------------------- |
-| No state file                                       | `waiting for first tracker poll`               |
-| No present battery                                  | `unavailable · no present battery`             |
+| The tracker has never run (`last_observed` is `0`)   | `waiting for first tracker poll`               |
+| A readable sysfs tree holds no battery              | `unavailable · no present battery`             |
 | Unknown history header                              | `unavailable · unsupported history format`     |
-| Fewer than 12 recent windows or 3 sessions          | `learning` with capped progress                |
-| Gate complete but learned draw/full runtime missing | `blocked · learned runtime unavailable`        |
+| Fewer than 4 recent windows                         | `learning` with capped progress                |
+| Gate incomplete but 4 or more recent windows        | `provisional`, with a low-confidence line      |
+| Gate complete but the median draw is unusable       | `blocked · learned runtime unavailable`        |
 | Gate complete but current energy/capacity missing   | `blocked · current battery energy unavailable` |
 | Gate complete and both projections valid            | `ready`                                        |
 
-A legacy state may derive remaining runtime by scaling its full runtime with
-`last_sample_energy_uwh / median_recent_capacity`. This prevents a false
-`learning` state during upgrade; the installed tracker writes explicit current
-and remaining fields on its next poll.
+The full gate is 12 recent windows across 3 sessions. There is no upgrade
+special case: a version-1 state file simply lacks fields the view no longer
+reads, and every estimate is recomputed from live sysfs and the discharge
+history on each render.
 
 ## Freshness and cached values
 
 Tracker state is live only when both services are active and `last_observed` is
-no more than 90 seconds old. Older state, a future timestamp, or an inactive
+newer than the poll-gap tolerance (`BATTERY_MODEL_MAX_POLL_GAP_SECONDS`). Older state, a future timestamp, or an inactive
 service marks current-energy runtime as cached. The learned model itself can
 remain ready because its 30-day evidence is independent of one missed poll.
 

@@ -11,24 +11,24 @@ Panel {
   ipcTarget: "omarchy.power"
   // manageIpc: false so this panel can own the target's single IpcHandler.
   manageIpc: false
-  property var batteryInfo: ({})
-  property var systemInfo: ({})
-  property var batteryDetails: ({})
-  property var chargeHistory: ({})
-  property real uptimeSeconds: 0
+  // The aggregated view: one document from service/battery-view.sh that
+  // supplies every panel field UPower does not push live over D-Bus. Nothing
+  // in this file reads the tracker state file, sysfs, or a helper command's
+  // output directly — if a field is missing, add it to the view.
+  property var view: Model.emptyView()
   property real nowEpochSeconds: Date.now() / 1000
-  readonly property string systemUptimeStr: Model.formatElapsed(root.uptimeSeconds)
-  readonly property string usualRuntimeStr: Model.formatRuntimeEstimate(root.chargeHistory.usualRemainingRuntimeSeconds)
+  readonly property string systemUptimeStr: Model.formatElapsed(root.view.uptimeSeconds)
+  readonly property string usualRuntimeStr: Model.formatRuntimeEstimate(root.view.remainingSeconds)
   readonly property bool usualRuntimeAvailable: usualRuntimeStr !== ""
   readonly property string sinceChargeStr: {
-    var start = Number(root.chargeHistory.stateStartEpoch || 0)
-    if (root.chargeHistory.state === "on-charge") {
-      start = start || Number(root.chargeHistory.chargeStartEpoch || 0)
+    var start = Number(root.view.stateSinceEpoch || 0)
+    if (root.view.powerState === "on-charge") {
+      start = start || Number(root.view.chargeStartEpoch || 0)
     }
     if (!(start > 0)) return "—"
     return Model.formatSessionDuration(
       root.nowEpochSeconds - start,
-      root.chargeHistory.stateStartAtLeast
+      root.view.stateSinceAtLeast
     )
   }
   readonly property var laptopBatteries: Model.getLaptopBatteries(UPower.devices)
@@ -41,25 +41,24 @@ Panel {
   readonly property real combinedChangeRate: {
     var rate = Model.totalChangeRate(root.laptopBatteries)
     if (rate > 0) return rate
-    var r = parseFloat(root.batteryInfo.rate)
-    return isNaN(r) ? 0 : r
+    return root.view.drawMw / 1000
   }
   readonly property string combinedCapacityStr: {
     if (combinedEnergyCapacity > 0) return Math.round(combinedEnergyCapacity) + "Wh"
-    return root.batteryInfo.size || ""
+    return Model.formatWattHours(root.view.energyCapacityUwh)
   }
   readonly property string combinedRateStr: {
     if (combinedChangeRate > 0.05) return combinedChangeRate.toFixed(1) + "W"
-    return root.batteryInfo.rate || "-"
+    return Model.formatWatts(root.view.drawMw) || "-"
   }
   // Time to empty/full computed from the combined pack, not whichever single
   // battery `omarchy-battery-status` happened to report on.
   readonly property string combinedTimeStr: {
     var label = Model.aggregateTimeLabel(root.combinedEnergy, root.combinedEnergyCapacity, root.combinedChangeRate, root.discharging)
-    return label || root.batteryInfo.time || "—"
+    return label || Model.formatRuntimeEstimate(root.view.liveTimeSeconds) || "—"
   }
-  property var profiles: []
-  property string activeProfile: ""
+  readonly property var profiles: root.view.profiles
+  readonly property string activeProfile: root.view.activeProfile
   property int profileIndex: 0
   property bool cursorActive: false
   // The bar always shows the combined percentage. Use the painted text width
@@ -185,51 +184,21 @@ Panel {
 
   function refresh() {
     if (!batteryPresent) return
-
-    if (!batteryProc.running) batteryProc.running = true
-    if (!profilesProc.running) profilesProc.running = true
-    if (!uptimeProc.running) uptimeProc.running = true
     root.nowEpochSeconds = Date.now() / 1000
-    if (!systemProc.running) systemProc.running = true
-    if (!chargeHistoryProc.running) chargeHistoryProc.running = true
-    if (!batDetailsProc.running) batDetailsProc.running = true
+    if (!viewProc.running) viewProc.running = true
   }
 
-  function updateKeyValue(raw, targetName) {
-    var next = Model.parseKeyValue(raw)
-    // Keep last known good data if a refresh briefly returns nothing — happens
-    // around AC plug/unplug events. Avoids the section collapsing mid-transition.
-    if (Object.keys(next).length === 0) return
-    if (targetName === "battery") batteryInfo = next
-    else systemInfo = next
-  }
-
-  function updateSessionState(raw) {
-    var next = Model.parseKeyValue(raw)
-    if (Object.keys(next).length === 0) return
-    chargeHistory = {
-      stateStartEpoch: Number(next.state_since || 0),
-      stateStartAtLeast: Number(next.state_since_at_least || 0) === 1,
-      chargeStartEpoch: Number(next.last_charge_start || 0),
-      chargeEndEpoch: Number(next.last_charge_end || 0),
-      usualRemainingRuntimeSeconds: Number(next.usual_remaining_runtime_seconds || 0),
-      usualFullRuntimeSeconds: Number(next.usual_full_runtime_seconds || 0),
-      usualSampleCount: Number(next.usual_sample_count || 0),
-      state: next.previous_state || ""
-    }
-  }
-
-  function updateProfiles(raw) {
-    var parsed = Model.parseProfiles(raw, profileIndex)
-    // Same guard as battery: preserve the last known profile list across
-    // transient empty payloads so the buttons don't blink out.
-    if (parsed.profiles.length === 0) return
-    profiles = parsed.profiles
-    activeProfile = parsed.activeProfile
-    profileIndex = parsed.profileIndex
+  function updateView(raw) {
+    var next = Model.parseView(raw)
+    // Keep the last known good view when a refresh returns nothing parseable —
+    // it happens around AC plug/unplug events, and the panel must not collapse
+    // mid-transition.
+    if (!next) return
+    root.view = next
+    root.profileIndex = Model.clampIndex(root.profileIndex, next.profiles.length)
     if (opened && !cursorActive) {
-      var idx = profiles.indexOf(activeProfile)
-      if (idx >= 0) profileIndex = idx
+      var idx = next.profiles.indexOf(next.activeProfile)
+      if (idx >= 0) root.profileIndex = idx
     }
   }
 
@@ -269,71 +238,19 @@ Panel {
   implicitWidth: batteryPresent ? button.implicitWidth : 0
   implicitHeight: batteryPresent ? button.implicitHeight : 0
 
-  Process {
-    id: batteryProc
-    command: ["omarchy-battery-status", "--shell"]
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateKeyValue(text, "battery") }
-  }
+  // The plugin's own directory, wherever it was installed to.
+  readonly property string viewCommand: decodeURIComponent(
+    Qt.resolvedUrl("service/battery-view.sh").toString().replace(/^file:\/\//, ""))
 
   Process {
-    id: profilesProc
-    command: ["omarchy-powerprofiles-list", "--active-state"]
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateProfiles(text) }
-  }
-
-  Process {
-    id: systemProc
-    command: ["omarchy-system-stats"]
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateKeyValue(text, "system") }
-  }
-
-  Process {
-    id: uptimeProc
-    command: ["cat", "/proc/uptime"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.uptimeSeconds = Model.parseUptime(text)
-    }
-  }
-
-  Process {
-    id: chargeHistoryProc
-    command: ["sh", "-c", "cat \"${XDG_STATE_HOME:-$HOME/.local/state}/battery-session/state\" 2>/dev/null"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.updateSessionState(text)
-    }
+    id: viewProc
+    command: [root.viewCommand]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateView(text) }
   }
 
   Process {
     id: actionProc
     onExited: root.refresh()
-  }
-
-  Process {
-    id: batDetailsProc
-    command: ["sh", "-c", "for b in /sys/class/power_supply/BAT*; do [ -d \"$b\" ] && echo \"$(basename \"$b\")\t$(cat \"$b/cycle_count\" 2>/dev/null || echo '')\t$(cat \"$b/model_name\" 2>/dev/null || echo '')\t$(cat \"$b/manufacturer\" 2>/dev/null || echo '')\t$(cat \"$b/status\" 2>/dev/null || echo '')\t$(cat \"$b/capacity\" 2>/dev/null || echo '')\t$(cat \"$b/charge_control_end_threshold\" 2>/dev/null || echo '')\"; done"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var lines = String(text || "").split("\n")
-        var map = {}
-        for (var i = 0; i < lines.length; i++) {
-          var parts = lines[i].split("\t")
-          if (parts.length >= 2 && parts[0]) {
-            map[parts[0]] = {
-              cycles: parts[1] || "",
-              model: parts[2] || "",
-              vendor: parts[3] || "",
-              status: parts[4] || "",
-              percentage: Number(parts[5] || 0),
-              endThreshold: Number(parts[6] || 0)
-            }
-          }
-        }
-        root.batteryDetails = map
-      }
-    }
   }
 
   Timer { interval: 5000; running: root.opened; repeat: true; onTriggered: root.refresh() }
@@ -530,7 +447,7 @@ Panel {
         // refuse to flicker the whole panel for that ~1s window.
         // ---------- Stats (System-Wide) ----------
         Row {
-          visible: root.batteryInfo.percentage !== undefined || root.laptopBatteries.length > 0
+          visible: root.view.available || root.laptopBatteries.length > 0
           width: parent.width
           spacing: Style.space(20)
 
@@ -552,7 +469,7 @@ Panel {
             spacing: Style.spacing.labelGap
             InfoPair {
               label: root.chargeThresholdActive ? "⌁ Limit" : (root.discharging ? "◷ Left" : "◷ Full")
-              value: root.chargeThresholdActive ? (root.batteryInfo.threshold || "-") : (root.batteryFlowIdle ? "-" : root.combinedTimeStr)
+              value: root.chargeThresholdActive ? (Model.formatPercent(root.view.chargeLimitPercent) || "-") : (root.batteryFlowIdle ? "-" : root.combinedTimeStr)
             }
             InfoPair {
               label: root.usualRuntimeAvailable ? "≈ Usual" : "● State"
@@ -616,7 +533,7 @@ Panel {
               required property var modelData
               required property int index
 
-              readonly property var extra: root.batteryDetails[modelData.nativePath] || ({})
+              readonly property var extra: root.view.batteries[modelData.nativePath] || ({})
               readonly property string batLabel: {
                 var name = modelData.nativePath || ("BAT" + index)
                 if (name === "BAT0") return "BAT0 (Internal)"

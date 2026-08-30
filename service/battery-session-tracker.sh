@@ -32,10 +32,13 @@ esac
 state_file="$state_dir/state"
 power_supply_root="${POWER_SUPPLY_ROOT:-/sys/class/power_supply}"
 notification_command="${BATTERY_SESSION_NOTIFY_COMMAND:-omarchy-notification-send}"
-mkdir -p "$state_dir"
+[[ -d "$state_dir" ]] || mkdir -p "$state_dir"
 
+service_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=power-supply.sh
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/power-supply.sh"
+source "$service_dir/power-supply.sh"
+# shellcheck source=battery-model.sh
+source "$service_dir/battery-model.sh"
 ac_online=0
 ac_mains_online && ac_online=1
 
@@ -134,71 +137,23 @@ capture_battery_capacity() {
   is_nonnegative_integer "$capacity" && ((capacity > 0)) && printf '%s' "$capacity"
 }
 
-history_schema_valid() {
-  [[ -f "$state_dir/discharge-history.tsv" ]] &&
-    [[ "$(head -n 1 "$state_dir/discharge-history.tsv" 2>/dev/null)" == $'# battery-discharge-history\tv1' ]]
-}
-
+# Trim the history to the retention rules. Only ever called after a row was
+# appended: the file cannot grow otherwise, and re-sorting a 96-row file on
+# every poll was the tracker's largest recurring cost.
 prune_history() {
   local history_file="$state_dir/discharge-history.tsv"
   local tmp_file cutoff
-  [[ -f "$history_file" ]] || return 0
-  history_schema_valid || return 0
-  cutoff=$((now - 180 * 24 * 60 * 60))
+  battery_model_history_valid "$history_file" || return 0
+  cutoff=$((now - BATTERY_MODEL_RETENTION_SECONDS))
   umask 077
   tmp_file="$history_file.tmp.$$"
   {
-    printf '# battery-discharge-history\tv1\n'
+    printf '%s\n' "$BATTERY_MODEL_HISTORY_HEADER"
     awk -F '\t' -v cutoff="$cutoff" \
       '$1 ~ /^[0-9]+$/ && $1 >= cutoff && $2 != "" && $3 ~ /^[1-9][0-9]*$/ && $4 ~ /^[1-9][0-9]*$/ { print }' \
-      "$history_file" | sort -n -k1,1 | tail -n 96
+      "$history_file" | sort -n -k1,1 | tail -n "$BATTERY_MODEL_RETENTION_ROWS"
   } >"$tmp_file"
   mv -f -- "$tmp_file" "$history_file"
-}
-
-compute_usual_runtime() {
-  local history_file="$state_dir/discharge-history.tsv"
-  local epoch session draw _historical_capacity
-  local median left right draw_count=0 session_count=0
-  local model_cutoff=$((now - 30 * 24 * 60 * 60))
-  local -a draws=()
-  local -A sessions=()
-
-  battery_energy_now_uwh=$(capture_energy_now_uwh)
-  battery_usable_capacity_uwh=$(capture_energy_capacity_uwh)
-  usual_remaining_runtime_seconds=0
-  usual_full_runtime_seconds=0
-  usual_sample_count=0
-  [[ -f "$history_file" ]] || return 0
-  history_schema_valid || return 0
-  ((battery_usable_capacity_uwh > 0)) || return 0
-
-  while IFS=$'\t' read -r epoch session draw _historical_capacity; do
-    [[ "$epoch" =~ ^[0-9]+$ && "$epoch" -ge "$model_cutoff" && "$epoch" -le "$now" && -n "$session" && "$draw" =~ ^[1-9][0-9]*$ ]] || continue
-    draws+=("$draw")
-    ((draw_count += 1))
-    if [[ -z ${sessions[$session]+x} ]]; then
-      sessions["$session"]=1
-      ((session_count += 1))
-    fi
-  done < <(grep -v '^#' "$history_file" 2>/dev/null || true)
-
-  ((draw_count >= 12 && session_count >= 3)) || return 0
-  mapfile -t draws < <(printf '%s\n' "${draws[@]}" | sort -n)
-  if ((draw_count % 2 == 1)); then
-    median=${draws[$((draw_count / 2))]}
-  else
-    left=${draws[$((draw_count / 2 - 1))]}
-    right=${draws[$((draw_count / 2))]}
-    median=$(((left + right) / 2))
-  fi
-  ((median > 0)) || return 0
-  # Energy is µWh and draw is mW; divide by 1000 to convert milli-hours.
-  usual_full_runtime_seconds=$(((battery_usable_capacity_uwh * 3600 + median * 500) / (median * 1000)))
-  if ((battery_energy_now_uwh > 0)); then
-    usual_remaining_runtime_seconds=$(((battery_energy_now_uwh * 3600 + median * 500) / (median * 1000)))
-  fi
-  usual_sample_count=$draw_count
 }
 
 format_session_minutes() {
@@ -343,7 +298,8 @@ is_nonnegative_integer "$now" || {
   exit 1
 }
 continuity=1
-if [[ "$last_observed" =~ ^[0-9]+$ ]] && ((last_observed > 0)) && ((now < last_observed || now - last_observed > 90)); then
+if [[ "$last_observed" =~ ^[0-9]+$ ]] && ((last_observed > 0)) &&
+  ((now < last_observed || now - last_observed > BATTERY_MODEL_MAX_POLL_GAP_SECONDS)); then
   continuity=0
   window_reset_reason="polling-gap"
 fi
@@ -382,6 +338,10 @@ elif ! is_nonnegative_integer "$state_since" || ((state_since == 0)); then
   state_since_at_least=1
 fi
 
+# Advance the sampling window and, when it completes, append one row of
+# evidence. The window's arithmetic and its plausibility rules live in
+# battery-model.sh; this function owns only the on-disk round trip.
+# Sets history_appended=1 when a row was written.
 record_discharge_window() {
   local current_energy elapsed energy_used draw history_file tmp_file
   current_energy=$(capture_energy_now_uwh)
@@ -412,17 +372,16 @@ record_discharge_window() {
   }
   elapsed=$((now - window_start_epoch))
   energy_used=$((window_start_energy_uwh - current_energy))
-  if ((elapsed < 15 * 60 || elapsed <= 0)); then
-    return 0
-  fi
+  ((elapsed > 0)) || return 0
+  battery_model_window_complete "$elapsed" || return 0
   if ((energy_used <= 0)); then
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
     window_reset_reason="no-energy-used"
     return 0
   fi
-  draw=$(((energy_used * 3600 + elapsed * 500) / (elapsed * 1000)))
-  if ((draw < 100 || draw > 120000)); then
+  draw=$(battery_model_window_draw_mw "$energy_used" "$elapsed") || return 0
+  if ! battery_model_draw_plausible "$draw"; then
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
     window_reset_reason="implausible-draw"
@@ -430,7 +389,7 @@ record_discharge_window() {
   fi
 
   history_file="$state_dir/discharge-history.tsv"
-  if [[ -f "$history_file" ]] && ! history_schema_valid; then
+  if [[ -f "$history_file" ]] && ! battery_model_history_valid "$history_file"; then
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
     window_reset_reason="history-schema-unsupported"
@@ -442,7 +401,7 @@ record_discharge_window() {
     if [[ -f "$history_file" ]]; then
       cat -- "$history_file"
     else
-      printf '# battery-discharge-history\tv1\n'
+      printf '%s\n' "$BATTERY_MODEL_HISTORY_HEADER"
     fi
     printf '%s\t%s\t%s\t%s\n' "$now" "$discharge_session_id" "$draw" "$(capture_energy_capacity_uwh)"
   } >"$tmp_file"
@@ -450,9 +409,11 @@ record_discharge_window() {
   window_start_epoch=$now
   window_start_energy_uwh=$current_energy
   window_reset_reason=""
+  history_appended=1
 }
 
 # Start or continue a sampling window only while running on battery.
+history_appended=0
 if [[ $current_state == "on-battery" ]]; then
   if [[ -z "$discharge_session_id" || "$continuity" == 0 ]]; then
     discharge_session_id="$now"
@@ -469,8 +430,9 @@ else
   window_reset_reason=""
 fi
 
-prune_history
-compute_usual_runtime
+# Nothing can have aged out of a file that did not just grow, and on AC there
+# is no window at all — so the poll ends here in the common case.
+((history_appended == 1)) && prune_history
 
 # An event is authoritative even if the fallback timer observed the state first.
 if ((power_event == 1)) && [[ $current_state == "on-charge" && $charge_session_valid != 1 ]]; then
@@ -484,6 +446,7 @@ fi
 umask 077
 tmp_file="$state_file.tmp.$$"
 {
+  printf 'state_schema_version=%q\n' "$BATTERY_STATE_SCHEMA_VERSION"
   printf 'previous_state=%q\n' "$current_state"
   printf 'state_since=%q\n' "$state_since"
   printf 'state_since_at_least=%q\n' "$state_since_at_least"
@@ -492,11 +455,6 @@ tmp_file="$state_file.tmp.$$"
   printf 'last_observed=%q\n' "$now"
   printf 'charge_start_levels=%q\n' "$charge_start_levels"
   printf 'charge_session_valid=%q\n' "$charge_session_valid"
-  printf 'battery_energy_now_uwh=%q\n' "$battery_energy_now_uwh"
-  printf 'battery_usable_capacity_uwh=%q\n' "$battery_usable_capacity_uwh"
-  printf 'usual_remaining_runtime_seconds=%q\n' "$usual_remaining_runtime_seconds"
-  printf 'usual_full_runtime_seconds=%q\n' "$usual_full_runtime_seconds"
-  printf 'usual_sample_count=%q\n' "$usual_sample_count"
   printf 'discharge_session_id=%q\n' "$discharge_session_id"
   printf 'window_start_epoch=%q\n' "$window_start_epoch"
   printf 'window_start_energy_uwh=%q\n' "$window_start_energy_uwh"

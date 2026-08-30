@@ -11,6 +11,7 @@ set -uo pipefail
 power_supply_root="${POWER_SUPPLY_ROOT:-/sys/class/power_supply}"
 systemctl_command="${BATTERY_SESSION_SYSTEMCTL_COMMAND:-systemctl}"
 monitor_command="${BATTERY_SESSION_MONITOR_COMMAND:-upower}"
+awk_command="${BATTERY_SESSION_AWK_COMMAND:-awk}"
 notification_command="${BATTERY_SESSION_NOTIFY_COMMAND:-omarchy-notification-send}"
 
 hard_failures=0
@@ -64,6 +65,32 @@ if command -v -- "$monitor_command" >/dev/null 2>&1; then
 else
   check_fail "$monitor_command not found; battery-session-monitor needs it to watch power events"
 fi
+
+# Every model computation in the tracker, the view, and the status report goes
+# through awk. Nothing degrades gracefully without it.
+if command -v -- "$awk_command" >/dev/null 2>&1; then
+  check_ok "$awk_command found"
+else
+  check_fail "$awk_command not found; the discharge model cannot be computed without it"
+fi
+
+# Bash 4.3 or newer: the scripts use associative arrays, mapfile, and namerefs.
+if ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3))); then
+  check_ok "bash ${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]} (4.3+ required)"
+else
+  check_fail "bash ${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]} is too old; 4.3+ is required for namerefs and associative arrays"
+fi
+
+# The panel calls these to draw and change the power profile. If Omarchy
+# renames one upstream, the widget fails silently with blank fields, so name
+# them here rather than letting the failure show up as an empty panel.
+for panel_command in omarchy-powerprofiles-list omarchy-powerprofiles-set; do
+  if command -v -- "$panel_command" >/dev/null 2>&1; then
+    check_ok "$panel_command found"
+  else
+    check_warn "$panel_command not found; the panel's power-profile picker will be empty"
+  fi
+done
 
 if command -v -- "$notification_command" >/dev/null 2>&1; then
   check_ok "$notification_command found"

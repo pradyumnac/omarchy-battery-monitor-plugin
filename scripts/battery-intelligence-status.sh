@@ -3,16 +3,19 @@
 # runtime data. Set BATTERY_STATUS_VERBOSE=1 (via `make status VERBOSE=1`) for
 # low-level collection details. ANSI styling is automatic on a TTY, forced
 # with BATTERY_STATUS_COLOR=always, and disabled by NO_COLOR or =never.
+#
+# This script computes nothing about the battery. It renders the aggregated
+# view from service/battery-view.sh — the same document Panel.qml reads — plus
+# the systemd service health, which is the one fact only an operator report
+# cares about.
 
 set -uo pipefail
 
-state_dir="${BATTERY_SESSION_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/battery-session}"
-state_file="$state_dir/state"
-history_file="$state_dir/discharge-history.tsv"
-power_supply_root="${BATTERY_STATUS_POWER_SUPPLY_ROOT:-/sys/class/power_supply}"
+view_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../service" && pwd -P)"
+# shellcheck source=../service/battery-view.sh
+source "$view_source/battery-view.sh"
+
 systemctl_command="${BATTERY_INTELLIGENCE_SYSTEMCTL_COMMAND:-systemctl}"
-now=${BATTERY_INTELLIGENCE_NOW:-$(date +%s)}
-stale_after=${BATTERY_STATUS_STALE_AFTER:-90}
 verbose=${BATTERY_STATUS_VERBOSE:-0}
 
 [[ $verbose == 0 || $verbose == 1 ]] || {
@@ -62,17 +65,6 @@ field() {
     "$color" "$text" "$reset"
 }
 
-value() {
-  local key=$1 file=$2
-  [[ -f "$file" ]] || return 0
-  awk -F= -v key="$key" '$1 == key {
-    result = substr($0, index($0, "=") + 1)
-    if (result == "\047\047" || result == "\"\"") result = ""
-    print result
-    exit
-  }' "$file"
-}
-
 format_duration() {
   local seconds=$1 minutes hours days
   minutes=$(((seconds + 59) / 60))
@@ -119,148 +111,6 @@ service_state() {
   fi
 }
 
-compute_history_stats() {
-  history_state="missing"
-  total=0
-  recent=0
-  sessions=0
-  future_rows=0
-  model_updated_epoch=0
-  last_draw_mw=0
-  last_capacity_uwh=0
-  typical_draw_mw=0
-  observed_peak_capacity_uwh=0
-  [[ -f "$history_file" ]] || return 0
-  if [[ "$(head -n 1 "$history_file" 2>/dev/null)" != $'# battery-discharge-history\tv1' ]]; then
-    history_state="unsupported"
-    return 0
-  fi
-  history_state="ready"
-
-  history_stats=$(awk -F '\t' -v now="$now" '
-    BEGIN { total = recent = sessions = future = latest = last_draw = last_capacity = 0; cutoff = now - 30 * 24 * 60 * 60 }
-    $1 ~ /^[0-9]+$/ && $2 != "" && $3 ~ /^[1-9][0-9]*$/ && $4 ~ /^[1-9][0-9]*$/ {
-      total++
-      if ($1 > now) {
-        future++
-      } else if ($1 >= cutoff) {
-        recent++
-        if (!recent_seen[$2]++) sessions++
-        if ($1 >= latest) {
-          latest = $1
-          last_draw = $3
-          last_capacity = $4
-        }
-      }
-    }
-    END { printf "%d\t%d\t%d\t%d\t%d\t%d\t%d", total, recent, sessions, future, latest, last_draw, last_capacity }
-  ' "$history_file")
-  IFS=$'\t' read -r total recent sessions future_rows model_updated_epoch last_draw_mw last_capacity_uwh <<<"$history_stats"
-
-  mapfile -t recent_draws < <(
-    awk -F '\t' -v now="$now" '
-      BEGIN { cutoff = now - 30 * 24 * 60 * 60 }
-      $1 ~ /^[0-9]+$/ && $1 >= cutoff && $1 <= now && $2 != "" &&
-        $3 ~ /^[1-9][0-9]*$/ && $4 ~ /^[1-9][0-9]*$/ { print $3 }
-    ' "$history_file" | sort -n
-  )
-  mapfile -t recent_capacities < <(
-    awk -F '\t' -v now="$now" '
-      BEGIN { cutoff = now - 30 * 24 * 60 * 60 }
-      $1 ~ /^[0-9]+$/ && $1 >= cutoff && $1 <= now && $2 != "" &&
-        $3 ~ /^[1-9][0-9]*$/ && $4 ~ /^[1-9][0-9]*$/ { print $4 }
-    ' "$history_file" | sort -n
-  )
-
-  local count=${#recent_draws[@]} middle
-  ((count > 0)) || return 0
-  middle=$((count / 2))
-  if ((count % 2 == 1)); then
-    typical_draw_mw=${recent_draws[$middle]}
-    observed_peak_capacity_uwh=${recent_capacities[$middle]}
-  else
-    typical_draw_mw=$(((recent_draws[middle - 1] + recent_draws[middle]) / 2))
-    observed_peak_capacity_uwh=$(((recent_capacities[middle - 1] + recent_capacities[middle]) / 2))
-  fi
-}
-
-# One line per battery: health against design capacity, full-charge energy, and
-# the live power flow while current moves. Reads sysfs directly so the report
-# stays correct on laptops whose battery names are not BAT0/BAT1.
-battery_summary() {
-  awk -v dir="$1" '
-    function read_value(path,   value) {
-      value = ""
-      if ((getline value < path) > 0) {
-        close(path)
-        return value
-      }
-      close(path)
-      return ""
-    }
-    BEGIN {
-      status = read_value(dir "/status")
-      full = read_value(dir "/energy_full") + 0
-      if (full == 0) full = read_value(dir "/charge_full") + 0
-      design = read_value(dir "/energy_full_design") + 0
-      if (design == 0) design = read_value(dir "/charge_full_design") + 0
-      power = read_value(dir "/power_now") + 0
-
-      health = (design > 0 ? sprintf("health %d%%", full * 100 / design) : "health N/A")
-      energy = (full > 0 ? sprintf("%.1f Wh", full / 1000000) : "-")
-      if (status == "Discharging")
-        detail = sprintf("Discharging · draw %.1f W", power / 1000000)
-      else if (status == "Charging")
-        detail = sprintf("Charging · charging power %.1f W", power / 1000000)
-      else
-        detail = ""
-
-      printf "%s · %s%s", health, energy, (detail != "" ? " · " detail : "")
-    }'
-}
-
-inspect_batteries() {
-  battery_presence="unknown"
-  charge_phase="unknown"
-  battery_count=0
-  charging_count=0
-  full_count=0
-  held_count=0
-  present_batteries=()
-  [[ -d "$power_supply_root" ]] || return 0
-  battery_presence="absent"
-
-  local battery_dir status
-  for battery_dir in "$power_supply_root"/BAT*; do
-    [[ -d "$battery_dir" ]] || continue
-    if [[ -f "$battery_dir/present" ]]; then
-      [[ "$(<"$battery_dir/present")" == 1 ]] || continue
-    elif [[ ! -f "$battery_dir/status" && ! -f "$battery_dir/capacity" ]]; then
-      continue
-    fi
-    battery_presence="present"
-    ((battery_count += 1))
-    present_batteries+=("$battery_dir")
-    status=""
-    [[ -f "$battery_dir/status" ]] && status=$(<"$battery_dir/status")
-    case $status in
-    Charging) ((charging_count += 1)) ;;
-    Full) ((full_count += 1)) ;;
-    "Not charging") ((held_count += 1)) ;;
-    esac
-  done
-
-  if ((charging_count > 0)); then
-    charge_phase="charging"
-  elif ((battery_count > 0 && full_count == battery_count)); then
-    charge_phase="full"
-  elif ((held_count > 0)); then
-    charge_phase="held"
-  elif ((battery_count > 0)); then
-    charge_phase="plugged"
-  fi
-}
-
 sampling_reason_label() {
   case $1 in
   battery-set-changed) printf 'battery set changed' ;;
@@ -274,7 +124,35 @@ sampling_reason_label() {
   esac
 }
 
+# One line per battery: health against design capacity, full-charge energy, and
+# the live power flow while current moves.
+battery_line() {
+  local index=$1 health energy detail
+  local full=${view_bat_energy_full_uwh[index]}
+  local design=${view_bat_energy_design_uwh[index]}
+  local power=${view_bat_power_now_uw[index]}
+
+  if ((design > 0)); then
+    health="health $((full * 100 / design))%"
+  else
+    health="health N/A"
+  fi
+  if ((full > 0)); then
+    energy=$(format_energy "$full")
+  else
+    energy="-"
+  fi
+  case ${view_bat_status[index]} in
+  Discharging) detail=" · Discharging · draw $(format_power $((power / 1000)))" ;;
+  Charging) detail=" · Charging · charging power $(format_power $((power / 1000)))" ;;
+  *) detail="" ;;
+  esac
+  printf '%s · %s%s' "$health" "$energy" "$detail"
+}
+
 heading
+battery_view_collect
+
 monitor_state=$(service_state battery-session-monitor.service)
 poller_state=$(service_state battery-session-tracker.timer)
 services_healthy=0
@@ -285,79 +163,44 @@ else
   field "Services" "tracker $poller_state · monitor $monitor_state" "$red"
 fi
 
-compute_history_stats
-inspect_batteries
-for battery_dir in "${present_batteries[@]}"; do
-  field "${battery_dir##*/}" "$(battery_summary "$battery_dir")"
+for ((index = 0; index < ${#view_bat_name[@]}; index++)); do
+  field "${view_bat_name[index]}" "$(battery_line "$index")"
 done
-window_progress=$recent
-session_progress=$sessions
-((window_progress > 12)) && window_progress=12
-((session_progress > 3)) && session_progress=3
 
-if [[ $battery_presence == absent ]]; then
+window_progress=$view_model_windows
+session_progress=$view_model_sessions
+((window_progress > BATTERY_MODEL_MIN_WINDOWS)) && window_progress=$BATTERY_MODEL_MIN_WINDOWS
+((session_progress > BATTERY_MODEL_MIN_SESSIONS)) && session_progress=$BATTERY_MODEL_MIN_SESSIONS
+learning_label="$window_progress/$BATTERY_MODEL_MIN_WINDOWS windows · $session_progress/$BATTERY_MODEL_MIN_SESSIONS sessions"
+
+# A power-supply tree we cannot read at all is not the same as one that
+# holds no battery; only the second is worth reporting as a missing battery.
+if ((view_sysfs_available == 1 && ${#view_bat_name[@]} == 0)); then
   field "Battery" "not detected" "$red"
   field "Model" "unavailable · no present battery" "$red"
   ((services_healthy == 0)) && field "Action" "run make install, then inspect failed user services" "$yellow"
   exit 0
 fi
 
-if [[ ! -f "$state_file" ]]; then
+if ((view_last_observed_epoch == 0)); then
   field "Model" "waiting for first tracker poll" "$yellow"
-  if [[ $history_state == unsupported ]]; then
+  if [[ $view_history_state == unsupported ]]; then
     field "History" "unsupported format" "$red"
   else
-    field "Learning" "$window_progress/12 windows · $session_progress/3 sessions" "$yellow"
+    field "Learning" "$learning_label" "$yellow"
   fi
   ((services_healthy == 0)) && field "Action" "run make install, then inspect failed user services" "$yellow"
   exit 0
 fi
 
-power_state=$(value previous_state "$state_file")
-state_since=$(value state_since "$state_file")
-last_observed=$(value last_observed "$state_file")
-window_start=$(value window_start_epoch "$state_file")
-window_start_energy=$(value window_start_energy_uwh "$state_file")
-last_sample_energy=$(value last_sample_energy_uwh "$state_file")
-current_energy=$(value battery_energy_now_uwh "$state_file")
-current_capacity=$(value battery_usable_capacity_uwh "$state_file")
-usual_remaining=$(value usual_remaining_runtime_seconds "$state_file")
-usual_full=$(value usual_full_runtime_seconds "$state_file")
-sampling_reset_reason=$(value window_reset_reason "$state_file")
-discharge_session=$(value discharge_session_id "$state_file")
-battery_fingerprint=$(value battery_fingerprint "$state_file")
+# The tracker being down makes every estimate cached, whatever its age says.
+freshness=$view_freshness
+[[ $freshness == live && $services_healthy == 0 ]] && freshness="cached"
 
-# A repository may render status before `make install` updates the live tracker.
-# Derive the new fields from compatible legacy state so a complete evidence gate
-# never incorrectly reports "learning" during an upgrade.
-[[ "$current_energy" =~ ^[1-9][0-9]*$ ]] || current_energy=$last_sample_energy
-if [[ ! "$current_capacity" =~ ^[1-9][0-9]*$ ]] && ((observed_peak_capacity_uwh > 0)); then
-  current_capacity=$observed_peak_capacity_uwh
-fi
-if [[ ! "$usual_remaining" =~ ^[1-9][0-9]*$ ]] &&
-  [[ "$usual_full" =~ ^[1-9][0-9]*$ && "$current_energy" =~ ^[1-9][0-9]*$ && "$current_capacity" =~ ^[1-9][0-9]*$ ]]; then
-  usual_remaining=$(((usual_full * current_energy + current_capacity / 2) / current_capacity))
-fi
-
-freshness="unknown"
-tracker_age=0
-if [[ "$last_observed" =~ ^[1-9][0-9]*$ && "$now" =~ ^[0-9]+$ ]]; then
-  tracker_age=$((now - last_observed))
-  if ((tracker_age < 0)); then
-    freshness="clock-mismatch"
-  elif ((tracker_age > stale_after || services_healthy == 0)); then
-    freshness="cached"
-  else
-    freshness="live"
-  fi
-elif ((services_healthy == 0)); then
-  freshness="cached"
-fi
-
-case $power_state in
+case $view_power_state in
 on-battery) power_label="on battery" ;;
 on-charge)
-  case $charge_phase in
+  case $view_power_phase in
   charging) power_label="charging" ;;
   full) power_label="full" ;;
   held) power_label="plugged in · charge held" ;;
@@ -366,101 +209,93 @@ on-charge)
   ;;
 *) power_label="unknown" ;;
 esac
-if [[ "$state_since" =~ ^[1-9][0-9]*$ && "$now" =~ ^[0-9]+$ && $now -ge $state_since ]]; then
-  power_label+=" · $(format_duration $((now - state_since)))"
+if ((view_state_since_epoch > 0 && view_generated_epoch >= view_state_since_epoch)); then
+  power_label+=" · $(format_duration $((view_generated_epoch - view_state_since_epoch)))"
 fi
 field "Power" "$power_label"
 
-charge_percent=-1
-if [[ "$current_energy" =~ ^[1-9][0-9]*$ && "$current_capacity" =~ ^[1-9][0-9]*$ ]]; then
-  charge_percent=$((current_energy * 100 / current_capacity))
-  ((charge_percent > 100)) && charge_percent=100
-  field "Energy" "$(format_energy "$current_energy") / $(format_energy "$current_capacity") · $charge_percent%"
+if ((view_charge_percent >= 0)); then
+  field "Energy" "$(format_energy "$view_energy_now_uwh") / $(format_energy "$view_energy_capacity_uwh") · $view_charge_percent%"
 else
   field "Energy" "not available" "$yellow"
 fi
-if [[ $power_state == on-charge && $charge_phase == unknown && $charge_percent -ge 99 ]]; then
-  charge_phase="full"
-fi
-
-model_state="learning"
-if [[ $history_state == unsupported ]]; then
-  model_state="unavailable"
-elif ((recent >= 12 && sessions >= 3)); then
-  if [[ ! "$usual_full" =~ ^[1-9][0-9]*$ || typical_draw_mw -le 0 ]]; then
-    model_state="blocked-runtime"
-  elif [[ ! "$current_energy" =~ ^[1-9][0-9]*$ || ! "$current_capacity" =~ ^[1-9][0-9]*$ || ! "$usual_remaining" =~ ^[1-9][0-9]*$ ]]; then
-    model_state="blocked-energy"
-  else
-    model_state="ready"
-  fi
-fi
 
 model_learned=""
-if [[ "$model_updated_epoch" =~ ^[1-9][0-9]*$ && "$now" =~ ^[0-9]+$ ]]; then
-  model_learned=" · learned $(format_age $((now - model_updated_epoch)))"
+if ((view_model_updated_epoch > 0)); then
+  model_learned=" · learned $(format_age $((view_generated_epoch - view_model_updated_epoch)))"
 fi
-case $model_state in
-ready)
-  field "Model" "ready · $recent windows / $sessions sessions$model_learned" "$green"
-  runtime_color=$green
-  runtime_suffix=""
-  if [[ $freshness != live ]]; then
+runtime_color=$green
+runtime_suffix=""
+if [[ $freshness != live ]]; then
+  runtime_color=$yellow
+  runtime_suffix=" (cached)"
+fi
+
+case $view_model_state in
+ready | provisional)
+  if [[ $view_model_state == provisional ]]; then
     runtime_color=$yellow
-    runtime_suffix=" (cached)"
-  fi
-  if [[ $power_state == on-charge && $charge_phase == full ]]; then
-    field "Usual runtime$runtime_suffix" "$(format_duration "$usual_full") · battery full" "$runtime_color"
-  elif [[ $power_state == on-charge ]]; then
-    field "If unplugged now$runtime_suffix" "$(format_duration "$usual_remaining")" "$runtime_color"
-    field "At full" "$(format_duration "$usual_full")"
+    field "Model" "provisional · $view_model_windows windows / $view_model_sessions sessions$model_learned" "$yellow"
+    field "Confidence" "low · needs $learning_label" "$dim"
   else
-    field "Usual remaining$runtime_suffix" "$(format_duration "$usual_remaining")" "$runtime_color"
-    field "At full" "$(format_duration "$usual_full")"
+    field "Model" "ready · $view_model_windows windows / $view_model_sessions sessions$model_learned" "$green"
   fi
-  field "Typical draw" "$(format_power "$typical_draw_mw")"
+  if [[ $view_power_state == on-charge && $view_power_phase == full ]]; then
+    field "Usual runtime$runtime_suffix" "$(format_duration "$view_full_seconds") · battery full" "$runtime_color"
+  elif [[ $view_power_state == on-charge ]]; then
+    field "If unplugged now$runtime_suffix" "$(format_duration "$view_remaining_seconds")" "$runtime_color"
+    field "At full" "$(format_duration "$view_full_seconds")"
+  else
+    field "Usual remaining$runtime_suffix" "$(format_duration "$view_remaining_seconds")" "$runtime_color"
+    field "At full" "$(format_duration "$view_full_seconds")"
+  fi
+  if ((view_remaining_low_seconds > 0 && view_remaining_high_seconds > view_remaining_low_seconds)); then
+    field "Range" "$(format_duration "$view_remaining_low_seconds") – $(format_duration "$view_remaining_high_seconds") · p25–p75" "$dim"
+  fi
+  if ((view_recent_remaining_seconds > 0)); then
+    field "Right now" "$(format_duration "$view_recent_remaining_seconds") · $(format_power "$view_recent_draw_mw") over the last $view_recent_window_count windows" "$dim"
+  fi
+  field "Typical draw" "$(format_power "$view_typical_draw_mw")"
   ;;
 blocked-energy)
   field "Model" "blocked · current battery energy unavailable" "$yellow"
-  field "Evidence" "$recent windows / $sessions sessions" "$dim"
+  field "Evidence" "$view_model_windows windows / $view_model_sessions sessions" "$dim"
   ;;
 blocked-runtime)
   field "Model" "blocked · learned runtime unavailable" "$yellow"
-  field "Evidence" "$recent windows / $sessions sessions" "$dim"
+  field "Evidence" "$view_model_windows windows / $view_model_sessions sessions" "$dim"
   ;;
 unavailable)
   field "Model" "unavailable · unsupported history format" "$red"
   ;;
 *)
-  field "Model" "learning · $window_progress/12 windows · $session_progress/3 sessions" "$yellow"
+  field "Model" "learning · $learning_label" "$yellow"
   ;;
 esac
 
-archived=$((total - recent - future_rows))
-if ((archived > 0)); then
-  field "History" "$recent recent · $archived archived" "$dim"
+if ((view_history_archived > 0)); then
+  field "History" "$view_history_recent recent · $view_history_archived archived" "$dim"
 fi
-if ((future_rows > 0)); then
-  field "History warning" "$future_rows future-dated row(s) ignored" "$yellow"
+if ((view_history_future > 0)); then
+  field "History warning" "$view_history_future future-dated row(s) ignored" "$yellow"
 fi
 
-if [[ -n $sampling_reset_reason ]]; then
-  if [[ $sampling_reset_reason == energy-unavailable && ! "$window_start" =~ ^[1-9][0-9]*$ ]]; then
-    field "Sampling" "paused · $(sampling_reason_label "$sampling_reset_reason")" "$yellow"
+if [[ -n $view_window_reset_reason ]]; then
+  if [[ $view_window_reset_reason == energy-unavailable ]] && ((view_window_start_epoch == 0)); then
+    field "Sampling" "paused · $(sampling_reason_label "$view_window_reset_reason")" "$yellow"
   else
-    field "Sampling" "restarted · $(sampling_reason_label "$sampling_reset_reason")" "$yellow"
+    field "Sampling" "restarted · $(sampling_reason_label "$view_window_reset_reason")" "$yellow"
   fi
-elif [[ "$window_start" =~ ^[1-9][0-9]*$ && "$now" =~ ^[0-9]+$ && $now -ge $window_start ]] &&
-  [[ $model_state == learning || $verbose == 1 ]]; then
-  elapsed=$((now - window_start))
-  progress=$((elapsed * 100 / (15 * 60)))
+elif ((view_window_start_epoch > 0)) &&
+  [[ $view_model_state == learning || $verbose == 1 ]]; then
+  progress=$((view_window_seconds * 100 / BATTERY_MODEL_WINDOW_SECONDS))
   ((progress > 100)) && progress=100
-  field "Current sample" "$progress% · $(format_duration "$elapsed") of 15m" "$cyan"
+  field "Current sample" "$progress% · $(format_duration "$view_window_seconds") of $(format_duration "$BATTERY_MODEL_WINDOW_SECONDS")" "$cyan"
 fi
 
 case $freshness in
-live) field "Updated" "$(format_age "$tracker_age")" "$dim" ;;
-cached) field "Data" "stale · tracker updated $(format_age "$tracker_age"); estimates are cached" "$yellow" ;;
+live) field "Updated" "$(format_age "$view_tracker_age_seconds")" "$dim" ;;
+cached) field "Data" "stale · tracker updated $(format_age "$view_tracker_age_seconds"); estimates are cached" "$yellow" ;;
 clock-mismatch) field "Data" "clock mismatch · estimates are cached" "$yellow" ;;
 *) field "Data" "freshness unknown · estimates may be cached" "$yellow" ;;
 esac
@@ -469,16 +304,18 @@ if ((services_healthy == 0)); then
 fi
 
 if [[ $verbose == 1 ]]; then
-  field "State file" "$state_file" "$dim"
-  field "History detail" "$total retained · $recent recent · $sessions recent sessions · $future_rows future" "$dim"
-  if ((model_updated_epoch > 0)); then
-    field "Last learned" "$(format_age $((now - model_updated_epoch))) · $(format_power "$last_draw_mw") · $(format_energy "$last_capacity_uwh")" "$dim"
+  state_dir="${BATTERY_SESSION_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/battery-session}"
+  field "State file" "$state_dir/state" "$dim"
+  field "View schema" "$BATTERY_VIEW_SCHEMA v$BATTERY_VIEW_VERSION · state v$BATTERY_STATE_SCHEMA_VERSION" "$dim"
+  field "History detail" "$view_history_total retained · $view_history_recent recent · $view_model_sessions recent sessions · $view_history_future future" "$dim"
+  if ((view_model_updated_epoch > 0)); then
+    field "Last learned" "$(format_age $((view_generated_epoch - view_model_updated_epoch)))" "$dim"
   fi
-  field "Session" "${discharge_session:-none}" "$dim"
-  if [[ "$window_start" =~ ^[1-9][0-9]*$ ]]; then
-    field "Window" "start $(format_energy "${window_start_energy:-0}") · last $(format_energy "${last_sample_energy:-0}")" "$dim"
+  field "Session" "${view_session_id:-none}" "$dim"
+  if ((view_window_start_epoch > 0)); then
+    field "Window" "open $(format_duration "$view_window_seconds") of $(format_duration "$BATTERY_MODEL_WINDOW_SECONDS")" "$dim"
   else
     field "Window" "inactive" "$dim"
   fi
-  field "Battery set" "${battery_fingerprint//\\,/, }" "$dim"
+  field "Battery set" "${view_battery_fingerprint//\\,/, }" "$dim"
 fi

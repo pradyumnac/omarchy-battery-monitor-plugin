@@ -48,40 +48,8 @@ function writeHistory(state, rows) {
   );
 }
 
-describe("discharge history and runtime learning", () => {
-  test("computes usual full runtime from seeded discharge history", () => {
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 40000000,
-        energy_full: 50000000,
-      });
-      writeHistory(f.state, [
-        "1000\tsession-a\t10000\t50000000",
-        "1010\tsession-a\t9000\t50000000",
-        "1020\tsession-a\t11000\t50000000",
-        "1030\tsession-a\t10000\t50000000",
-        "1040\tsession-a\t12000\t50000000",
-        "1050\tsession-b\t10000\t50000000",
-        "1060\tsession-b\t9000\t50000000",
-        "1070\tsession-b\t11000\t50000000",
-        "1080\tsession-b\t10000\t50000000",
-        "1090\tsession-c\t12000\t50000000",
-        "1100\tsession-c\t10000\t50000000",
-        "1110\tsession-c\t9000\t50000000",
-      ]);
-
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "2000" });
-      assert.match(state, /^battery_energy_now_uwh=40000000$/m);
-      assert.match(state, /^battery_usable_capacity_uwh=50000000$/m);
-      assert.match(state, /^usual_remaining_runtime_seconds=14400$/m);
-      assert.match(state, /^usual_full_runtime_seconds=18000$/m);
-      assert.match(state, /^usual_sample_count=12$/m);
-    });
-  });
-
-  test("records a 15-minute discharge window and updates usual runtime", () => {
+describe("discharge history recording", () => {
+  test("records a 15-minute discharge window", () => {
     withBatteryFixture((f) => {
       writeBattery(f.root, "BAT0", {
         present: 1,
@@ -108,9 +76,7 @@ describe("discharge history and runtime learning", () => {
         runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
       }
       writeBattery(f.root, "BAT0", { energy_now: 47500000 });
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "1900" });
-      assert.match(state, /^usual_full_runtime_seconds=18000$/m);
-      assert.match(state, /^usual_sample_count=12$/m);
+      runTracker(f, { BATTERY_SESSION_NOW: "1900" });
       assert.match(
         fs.readFileSync(path.join(f.state, "discharge-history.tsv"), "utf8"),
         /1900\t[0-9]+\t10000\t50000000/,
@@ -118,11 +84,12 @@ describe("discharge history and runtime learning", () => {
     });
   });
 
-  test("retains only recent valid history rows and adjusts for current capacity", () => {
+  test("prunes stale history when a new window is recorded", () => {
     withBatteryFixture((f) => {
       writeBattery(f.root, "BAT0", {
         present: 1,
         status: "Discharging",
+        energy_now: 50000000,
         energy_full: 40000000,
       });
       const rows = [
@@ -140,82 +107,47 @@ describe("discharge history and runtime learning", () => {
       ];
       writeHistory(f.state, rows);
 
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "20000000" });
+      // Five polls inside the gap tolerance, spanning one full 15-minute
+      // window, so the last one appends a row and triggers the prune.
+      for (const timestamp of [
+        19999100, 19999280, 19999460, 19999640, 19999820,
+      ]) {
+        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
+      }
+      writeBattery(f.root, "BAT0", { energy_now: 47500000 });
+      runTracker(f, { BATTERY_SESSION_NOW: "20000000" });
+
       const history = fs
         .readFileSync(path.join(f.state, "discharge-history.tsv"), "utf8")
         .trim()
         .split("\n");
       assert.equal(history.length, 97);
       assert.equal(history[0], "# battery-discharge-history\tv1");
-      assert.match(history[1], /^19990004\t/);
+      assert.match(history[history.length - 1], /^20000000\t[0-9]+\t10000\t/);
       assert.doesNotMatch(history.join("\n"), /old-session/);
-      assert.match(state, /^usual_full_runtime_seconds=14400$/m);
-      assert.match(state, /^usual_sample_count=96$/m);
     });
   });
 
-  test("uses recent observations while retaining older back-reference data", () => {
+  test("leaves the history untouched when no window completed", () => {
     withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", { present: 1, energy_full: 50000000 });
-      const older = Array.from(
-        { length: 12 },
-        (_, index) => `${17000000 + index}\told-${index % 3}\t20000\t50000000`,
-      );
-      const recent = Array.from(
-        { length: 12 },
-        (_, index) => `${19990000 + index}\tnew-${index % 3}\t10000\t50000000`,
-      );
-      writeHistory(f.state, [...older, ...recent]);
-
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "20000000" });
-      const history = fs.readFileSync(
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        status: "Discharging",
+        energy_now: 50000000,
+        energy_full: 50000000,
+      });
+      // An expired row a prune would remove, if a prune were due.
+      writeHistory(f.state, ["4000000\told-session\t10000\t50000000"]);
+      const before = fs.readFileSync(
         path.join(f.state, "discharge-history.tsv"),
         "utf8",
       );
-      assert.match(state, /^usual_full_runtime_seconds=18000$/m);
-      assert.match(state, /^usual_sample_count=12$/m);
-      assert.match(history, /17000000\told-0\t20000/);
-    });
-  });
 
-  test("ignores future-dated observations in the model", () => {
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", { present: 1, energy_full: 50000000 });
-      const recent = Array.from(
-        { length: 11 },
-        (_, index) => `${19990000 + index}\trecent-${index % 3}\t10000\t50000000`,
+      runTracker(f, { BATTERY_SESSION_NOW: "20000000" });
+      assert.equal(
+        fs.readFileSync(path.join(f.state, "discharge-history.tsv"), "utf8"),
+        before,
       );
-      writeHistory(f.state, [
-        ...recent,
-        "20000100\tfuture-session\t10000\t50000000",
-      ]);
-
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "20000000" });
-      assert.match(state, /^usual_full_runtime_seconds=0$/m);
-      assert.match(state, /^usual_sample_count=0$/m);
-    });
-  });
-
-  test("uses the median instead of an outlier for an odd sample set", () => {
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", { present: 1, energy_full: 50000000 });
-      writeHistory(f.state, [
-        "100\ta\t8000\t50000000",
-        "200\ta\t9000\t50000000",
-        "300\tb\t10000\t50000000",
-        "400\tb\t11000\t50000000",
-        "500\tc\t12000\t50000000",
-        "600\tc\t100000\t50000000",
-        "700\ta\t10000\t50000000",
-        "800\tb\t10000\t50000000",
-        "900\tc\t10000\t50000000",
-        "1000\ta\t10000\t50000000",
-        "1100\tb\t10000\t50000000",
-        "1200\tc\t10000\t50000000",
-        "1300\ta\t10000\t50000000",
-      ]);
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "2000" });
-      assert.match(state, /^usual_full_runtime_seconds=18000$/m);
     });
   });
 
@@ -447,7 +379,6 @@ describe("battery topology and aggregation", () => {
         ].join("\n") + "\n",
       );
       const state = runTracker(f, { BATTERY_SESSION_NOW: "2000" });
-      assert.match(state, /^usual_full_runtime_seconds=0$/m);
       assert.match(state, /^window_reset_reason=energy-unavailable$/m);
       assert.equal(
         fs
@@ -465,16 +396,15 @@ describe("state file permissions", () => {
       writeBattery(f.root, "BAT0", {
         present: 1,
         status: "Discharging",
+        energy_now: 50000000,
         energy_full: 50000000,
       });
-      writeHistory(f.state, [
-        ...Array.from(
-          { length: 12 },
-          (_, index) =>
-            `${1000 + index}\\tsession-${index % 3}\\t10000\\t50000000`,
-        ),
-      ]);
-      runTracker(f, { BATTERY_SESSION_NOW: "2000" });
+      for (const timestamp of [1000, 1180, 1360, 1540, 1720]) {
+        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
+      }
+      writeBattery(f.root, "BAT0", { energy_now: 47500000 });
+      runTracker(f, { BATTERY_SESSION_NOW: "1900" });
+
       assert.equal(fs.statSync(path.join(f.state, "state")).mode & 0o777, 0o600);
       assert.equal(
         fs.statSync(path.join(f.state, "discharge-history.tsv")).mode & 0o777,

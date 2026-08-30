@@ -5,7 +5,12 @@
 - Omarchy with Quickshell
 - A laptop battery (`make doctor` checks this)
 - UPower and `systemctl --user`
+- Bash 4.3 or newer, and `awk`
 - A Nerd Font available to the Omarchy shell
+
+`make doctor` checks every one of these before anything is written. `PKGBUILD`
+holds the same list in machine-readable form. Node is a development dependency
+for `make test` only and is never on the runtime path.
 
 ## Install
 

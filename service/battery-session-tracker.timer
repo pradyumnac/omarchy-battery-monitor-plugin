@@ -2,9 +2,17 @@
 Description=Poll battery charge state for the Omarchy power widget
 
 [Timer]
-OnBootSec=30s
-OnUnitActiveSec=30s
-AccuracySec=5s
+# The model consumes one 15-minute discharge window at a time, and
+# battery-session-monitor.sh event-triggers on every real AC transition. This
+# timer is the redundant safety net, so it samples far below the window length
+# instead of every 30s. No AccuracySec: the systemd default (60s) lets the
+# wakeup coalesce with other timers and keeps the CPU in deeper idle states.
+OnBootSec=1min
+# Keep in step with BATTERY_MODEL_POLL_INTERVAL_SECONDS in
+# service/battery-model.sh, which derives the tracker's suspend/clock-gap
+# tolerance from it.
+OnUnitActiveSec=3min
+RandomizedDelaySec=30s
 Persistent=true
 
 [Install]

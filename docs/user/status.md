@@ -62,13 +62,35 @@ uses its own state, percentage, and threshold status.
 ### While learning
 
 ```text
-Model: learning · 4/12 windows · 1/3 sessions
+Model: learning · 3/12 windows · 1/3 sessions
 Current sample: 8m of 15m
 ```
 
-Leave the tracker running across ordinary battery use. It needs 12 accepted
-15-minute windows from 3 discharge sessions. Charging, suspend gaps, battery
-changes, missing energy, and implausible measurements do not count.
+Leave the tracker running across ordinary battery use. Charging, suspend gaps,
+battery changes, missing energy, and implausible measurements do not count.
+
+After 4 accepted windows the report starts offering a rough answer and says so:
+
+```text
+Model: provisional · 5 windows / 1 sessions
+Confidence: low · needs 5/12 windows · 1/3 sessions
+Usual remaining: 3h 48m
+```
+
+It reaches `ready` at 12 accepted 15-minute windows from 3 discharge sessions.
+
+### Reading the range
+
+```text
+Usual remaining: 3h 48m
+Range: 3h 20m – 4h 15m · p25–p75
+Right now: 2h 10m · 18.4 W over the last 4 windows
+```
+
+`Usual remaining` is the typical answer. `Range` says how wrong it could be:
+half of your recorded windows fall inside it. `Right now` uses only the newest
+few windows, so it drops when the machine is working hard and the 30-day
+typical figure has not caught up.
 
 ### While charging
 
@@ -100,7 +122,7 @@ This does not discard earlier valid history.
 | ----------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `Model: blocked · current battery energy unavailable` | Enough history exists, but the current battery cannot provide the numerator | Check `make status VERBOSE=1`; confirm every present battery exposes compatible energy data        |
 | `Model: unavailable · unsupported history format`     | The history file is from an unknown schema                                  | Keep the file for diagnosis; do not edit it in place                                               |
-| `Data: stale`                                         | The tracker has not refreshed state for over 90 seconds                     | Run `make install`, then inspect failed user services if the warning remains                       |
+| `Data: stale`                                         | The tracker has not refreshed state for several poll intervals              | Run `make install`, then inspect failed user services if the warning remains                       |
 | `Data: clock mismatch`                                | The recorded update is in the future relative to the current clock          | Correct the clock and wait for a tracker poll                                                      |
 | `Battery: not detected`                               | No present `BAT*` supply exists                                             | Reinsert a removable battery or verify `/sys/class/power_supply`                                   |
 | An inactive service                                   | Collection or notifications are stopped                                     | Run `make install`; use verbose status and `systemctl --user status <unit>` if it remains inactive |
