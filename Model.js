@@ -196,6 +196,40 @@ function formatWatts(milliWatts) {
   return (value / 1000).toFixed(1) + "W";
 }
 
+// What one battery's own evidence says about it, as the panel card writes it.
+// Lives here rather than in a QML binding so it can be tested: the panel shows
+// a per-battery projection now, and "which battery does this number describe"
+// is exactly the confusion worth guarding against.
+function batteryProjectionLabel(projection, requiredWindows) {
+  var p = projection || {};
+  var state = String(p.state || "");
+  if (state === "ready" || state === "provisional") {
+    var left = formatRuntimeEstimate(p.remainingSeconds);
+    if (!left) return "";
+    // The tilde marks an estimate that has not met the full evidence gate.
+    return (state === "provisional" ? "~ " : "") + left;
+  }
+  if (state === "blocked-energy") return "no capacity reported";
+  if (state === "unavailable") return "history unreadable";
+  if (state === "learning") {
+    var required = Number(requiredWindows) > 0 ? Number(requiredWindows) : 12;
+    return "learning " + viewNumber(p.windows) + "/" + required;
+  }
+  return "";
+}
+
+// The draw behind that projection, naming the estimator only when it is not
+// the default — a selected estimator is worth surfacing, the incumbent is not.
+function batteryDrawLabel(projection) {
+  var p = projection || {};
+  var draw = viewNumber(p.typicalDrawMw);
+  if (!(draw > 0)) return "";
+  var label = formatWatts(draw);
+  var estimator = String(p.estimator || "");
+  if (estimator && estimator !== "median") label += " · " + estimator;
+  return label;
+}
+
 function formatPercent(value) {
   var number = viewNumber(value);
   if (!(number > 0)) return "";
@@ -449,6 +483,8 @@ if (typeof module === "object" && module !== null) {
     formatWattHours: formatWattHours,
     formatWatts: formatWatts,
     formatPercent: formatPercent,
+    batteryProjectionLabel: batteryProjectionLabel,
+    batteryDrawLabel: batteryDrawLabel,
     profileIcon: profileIcon,
     batteryFraction: batteryFraction,
     chargeThresholdActive: chargeThresholdActive,
