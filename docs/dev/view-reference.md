@@ -99,8 +99,8 @@ model has nothing to say.
 | `history.unattributed` | Version-1 windows, recorded before identity tracking. Evidence, but never assigned to a set |
 | `history.previous_pack` | Key of the most recent other set, or empty |
 | `sampling.pack_key` | Identity of the set installed now: `NAME:VENDOR:MODEL:SERIAL` per battery, comma separated in name order |
-| `batteries[].model.estimator` | Which estimator this battery projects with, chosen by the tracker from its own held-out score |
-| `batteries[].model.estimator_error_mw` | That estimator's held-out mean error on this battery, so the choice is auditable |
+| `batteries[].projection.estimator` | Which estimator this battery projects with, chosen by the tracker from its own held-out score |
+| `batteries[].projection.estimator_error_mw` | That estimator's held-out mean error on this battery, so the choice is auditable |
 | `sampling.pack_key_weak` | `true` when the firmware publishes no serial, so two identical spare batteries cannot be told apart. Say so rather than implying certainty |
 | `sampling.window_start_epoch` / `window_seconds` / `window_target_seconds` | Progress of the open discharge window |
 | `sampling.reset_reason` | Why the open window last restarted, or empty |
@@ -112,7 +112,9 @@ model has nothing to say.
 
 `batteries` is one object per present battery: `name`, `status`, `percent`,
 `energy_now_uwh`, `energy_full_uwh`, `energy_full_design_uwh`, `power_now_uw`,
-`cycle_count`, `model`, `vendor`, `end_threshold_percent`, `held`. `name` is
+`cycle_count`, `model`, `vendor`, `end_threshold_percent`, `held`, `key`, and
+`projection`. `model` is the cell's model name; `projection` is its own runtime
+model, deliberately named apart so the two never collide. `name` is
 the sysfs directory name, which is what UPower reports as `nativePath`, so a
 consumer can join the two without a lookup table.
 

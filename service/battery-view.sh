@@ -496,7 +496,7 @@ battery_view_json_batteries() {
     battery_view_json_string key "${view_bat_key[index]}"
     battery_view_json_string state "${view_bat_model_state[index]}"
     battery_view_json_string estimator "${view_bat_estimator[index]}"
-    printf -v _bv_bat_out '%s%s\n    {"name": %s, "status": %s, "percent": %s, "energy_now_uwh": %s, "energy_full_uwh": %s, "energy_full_design_uwh": %s, "power_now_uw": %s, "cycle_count": %s, "model": %s, "vendor": %s, "end_threshold_percent": %s, "held": %s, "key": %s, "model": {"state": %s, "estimator": %s, "estimator_error_mw": %s, "windows": %s, "sessions": %s, "typical_draw_mw": %s, "remaining_seconds": %s, "full_seconds": %s, "remaining_low_seconds": %s, "remaining_high_seconds": %s}}' \
+    printf -v _bv_bat_out '%s%s\n    {"name": %s, "status": %s, "percent": %s, "energy_now_uwh": %s, "energy_full_uwh": %s, "energy_full_design_uwh": %s, "power_now_uw": %s, "cycle_count": %s, "model": %s, "vendor": %s, "end_threshold_percent": %s, "held": %s, "key": %s, "projection": {"state": %s, "estimator": %s, "estimator_error_mw": %s, "windows": %s, "sessions": %s, "typical_draw_mw": %s, "remaining_seconds": %s, "full_seconds": %s, "remaining_low_seconds": %s, "remaining_high_seconds": %s}}' \
       "$_bv_bat_out" "$separator" "$name" "$status" \
       "${view_bat_percent[index]}" \
       "${view_bat_energy_now_uwh[index]}" \

@@ -153,7 +153,7 @@ function parseView(raw) {
     var battery = batteries[j] || {};
     var name = String(battery.name || "");
     if (!name) continue;
-    var batteryModel = battery.model || {};
+    var batteryModel = battery.projection || {};
     view.batteries[name] = {
       status: String(battery.status || ""),
       percentage: viewNumber(battery.percent),
@@ -163,8 +163,9 @@ function parseView(raw) {
       endThreshold: viewNumber(battery.end_threshold_percent),
       held: battery.held === true,
       key: String(battery.key || ""),
-      // This battery's own model, built only from its own windows.
-      model: {
+      // This battery's own runtime projection, built only from its own
+      // windows. Named apart from `model`, which is the cell's model name.
+      projection: {
         state: String(batteryModel.state || "learning"),
         windows: viewNumber(batteryModel.windows),
         sessions: viewNumber(batteryModel.sessions),

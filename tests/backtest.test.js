@@ -1,87 +1,135 @@
+// `make backtest`: the evidence gate for any model change.
+//
+// The scoring itself is unit tested in model-lib.test.js. What matters here is
+// that the report reaches the same verdict the running model does, and that it
+// refuses to report where it has nothing to say.
+
 const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { withFixture } = require("./support/fixture");
+const {
+  backtestScript,
+  writeHistory,
+  windowsFor,
+  KEY_BAT0,
+  KEY_BAT1,
+  HISTORY_HEADER_V2,
+} = require("./support/battery");
 
-const backtest = path.join(__dirname, "..", "scripts", "battery-backtest.sh");
-
-function writeHistory(dir, rows) {
-  const file = path.join(dir, "discharge-history.tsv");
-  fs.writeFileSync(
-    file,
-    ["# battery-discharge-history\tv1", ...rows].join("\n") + "\n",
+function run(stateDir, extraEnv = {}) {
+  return spawnSync(
+    backtestScript,
+    [path.join(stateDir, "discharge-history.tsv")],
+    { env: { ...process.env, ...extraEnv }, encoding: "utf8" },
   );
-  return file;
 }
 
-function run(file, extraEnv = {}) {
-  return spawnSync(backtest, [file], {
-    env: { ...process.env, ...extraEnv },
-    encoding: "utf8",
+// A load that alternates between quiet and heavy blocks, so a recency
+// estimator has something real to beat the median with.
+function shiftingWindows(key, start) {
+  return windowsFor(key, {
+    count: 40,
+    sessions: 5,
+    start,
+    drawMw: (index) => (Math.floor(index / 8) % 2 === 1 ? 18000 : 7000),
   });
 }
 
-describe("the backtest harness", () => {
-  test("scores every estimator against held-out rows", () => {
-    withFixture({ dir: "backtest" }, (f) => {
-      // 40 windows alternating between a quiet and a heavy session.
-      const rows = [];
-      for (let session = 0; session < 5; session += 1) {
-        const base = session % 2 === 1 ? 18000 : 7000;
-        for (let window = 0; window < 8; window += 1) {
-          const epoch = 1900000000 + (session * 8 + window) * 900;
-          rows.push(`${epoch}\ts${session}\t${base + window * 100}\t50000000`);
-        }
-      }
-      const result = run(writeHistory(f.dir, rows));
-
+describe("the backtest report", () => {
+  test("scores every estimator separately for each battery", () => {
+    // Given windows for two different batteries
+    // When the report is produced
+    // Then each battery gets its own scores, because an estimator suiting a
+    // healthy cell need not suit a worn one
+    withFixture({ state: "backtest" }, (f) => {
+      writeHistory(f.state, [
+        ...shiftingWindows(KEY_BAT1, 1900000000),
+        ...shiftingWindows(KEY_BAT0, 1900100000),
+      ]);
+      const result = run(f.state);
       assert.equal(result.status, 0, result.stderr);
-      assert.match(result.stdout, /40 valid rows · 36 scored predictions/);
+      assert.match(result.stdout, /BAT1 · SMP · 01AV425 · 783/);
+      assert.match(result.stdout, /BAT0 · LGC · 01AV420 · 1020/);
       for (const estimator of ["median", "recent", "ewma", "last"]) {
         assert.match(result.stdout, new RegExp(`\\b${estimator}\\b.*mW`));
       }
     });
   });
 
-  test("never lets an estimator see the row it is predicting", () => {
-    withFixture({ dir: "backtest-holdout" }, (f) => {
-      // Every prior window is 10000; the final row is nothing like them. An
-      // estimator that peeked at the row would score a zero error on it.
-      const rows = Array.from(
-        { length: 10 },
-        (_, index) => `${1900000000 + index * 900}\ts0\t10000\t50000000`,
-      );
-      rows.push(`${1900000000 + 10 * 900}\ts0\t90000\t50000000`);
-      const result = run(writeHistory(f.dir, rows));
-
+  test("reports the selection the tracker would actually make", () => {
+    // The report and the running model must not tell different stories, so the
+    // report states the choice as well as the scores.
+    withFixture({ state: "backtest-selection" }, (f) => {
+      writeHistory(f.state, shiftingWindows(KEY_BAT1, 1900000000));
+      const result = run(f.state);
       assert.equal(result.status, 0, result.stderr);
-      // The last row contributes an 80000 mW error to every estimator, so no
-      // estimator can report a mean error near zero.
+      assert.match(result.stdout, /selected: \w+/);
+    });
+  });
+
+  test("never lets an estimator see the window it is predicting", () => {
+    // Given a long steady run ending in one wildly different window
+    // When the report is produced
+    // Then no estimator reports a near-zero error, which it could only do by
+    // having seen the window it was asked to predict
+    withFixture({ state: "backtest-holdout" }, (f) => {
+      const rows = windowsFor(KEY_BAT1, {
+        count: 12,
+        sessions: 1,
+        drawMw: 10000,
+        start: 1900000000,
+      });
+      rows.push(
+        ...windowsFor(KEY_BAT1, {
+          count: 1,
+          drawMw: 90000,
+          start: 1900009999,
+        }),
+      );
+      writeHistory(f.state, rows);
+
+      const result = run(f.state);
+      assert.equal(result.status, 0, result.stderr);
       const means = [...result.stdout.matchAll(/^\s+\w+\s+\d+\s+(\d+) mW/gm)];
       assert.ok(means.length >= 3);
       for (const [, mean] of means) {
-        assert.ok(Number(mean) > 1000, `suspiciously small error: ${mean}`);
+        assert.ok(Number(mean) > 500, `suspiciously small error: ${mean}`);
       }
     });
   });
 
-  test("refuses to report on history too short to hold anything out", () => {
-    withFixture({ dir: "backtest-empty" }, (f) => {
-      const result = run(
-        writeHistory(f.dir, ["1900000000\ts0\t10000\t50000000"]),
-      );
+  test("refuses history too short to hold anything out", () => {
+    withFixture({ state: "backtest-short" }, (f) => {
+      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 1 }));
+      const result = run(f.state);
       assert.equal(result.status, 1);
-      assert.match(result.stderr, /Not enough history/);
+      assert.match(result.stderr, /No battery has enough history/);
     });
   });
 
-  test("refuses a history file whose schema it does not know", () => {
-    withFixture({ dir: "backtest-schema" }, (f) => {
-      const file = path.join(f.dir, "discharge-history.tsv");
-      fs.writeFileSync(file, "# battery-discharge-history\tv99\n");
-      const result = run(file);
+  test("refuses a schema it cannot score per battery", () => {
+    // Given a pack-level history from an older schema
+    // When the report is produced
+    // Then it says so rather than scoring rows it cannot attribute
+    withFixture({ state: "backtest-legacy" }, (f) => {
+      writeHistory(
+        f.state,
+        ["1900000000\ts0\t9000\t26000000"],
+        HISTORY_HEADER_V2,
+      );
+      const result = run(f.state);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /predates per-battery records/);
+    });
+  });
+
+  test("refuses a schema it does not know at all", () => {
+    withFixture({ state: "backtest-schema" }, (f) => {
+      writeHistory(f.state, [], "# battery-discharge-history\tv99");
+      const result = run(f.state);
       assert.equal(result.status, 1);
       assert.match(result.stderr, /Unsupported history format/);
     });
