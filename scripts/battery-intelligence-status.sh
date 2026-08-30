@@ -119,6 +119,8 @@ service_state() {
 sampling_reason_label() {
   case $1 in
   battery-set-changed) printf 'battery set changed' ;;
+  battery-baseline-missing) printf 'per-battery baseline missing after upgrade' ;;
+  no-battery-evidence) printf 'no battery measurably discharged' ;;
   polling-gap) printf 'polling gap or clock change' ;;
   energy-unavailable) printf 'battery energy unavailable' ;;
   energy-increased) printf 'stored energy increased' ;;
@@ -198,6 +200,15 @@ battery_block() {
 
   if ((draw > 0)); then
     subfield "Typical draw" "$(format_power "$draw")"
+  fi
+  # The sampling window measures whichever battery is actually discharging, so
+  # its progress is reported against that battery rather than the pack.
+  if [[ ${view_bat_status[index]} == Discharging ]] && ((view_window_start_epoch > 0)); then
+    local progress=$((view_window_seconds * 100 / BATTERY_MODEL_WINDOW_SECONDS))
+    ((progress > 100)) && progress=100
+    subfield "Current sample" \
+      "$progress% · $(format_duration "$view_window_seconds") of $(format_duration "$BATTERY_MODEL_WINDOW_SECONDS")" \
+      "$cyan"
   fi
   if ((view_bat_remaining_seconds[index] > 0)); then
     subfield "From this level" "$(format_duration "${view_bat_remaining_seconds[index]}")"
@@ -352,11 +363,6 @@ if [[ -n $view_window_reset_reason ]]; then
   else
     field "Sampling" "restarted · $(sampling_reason_label "$view_window_reset_reason")" "$yellow"
   fi
-elif ((view_window_start_epoch > 0)) &&
-  [[ $view_model_state == learning || $verbose == 1 ]]; then
-  progress=$((view_window_seconds * 100 / BATTERY_MODEL_WINDOW_SECONDS))
-  ((progress > 100)) && progress=100
-  field "Current sample" "$progress% · $(format_duration "$view_window_seconds") of $(format_duration "$BATTERY_MODEL_WINDOW_SECONDS")" "$cyan"
 fi
 
 case $freshness in

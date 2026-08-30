@@ -484,6 +484,17 @@ record_discharge_window() {
     window_start_energies=$(capture_battery_energies)
     return 0
   }
+  # Evidence is recorded per battery, so a window with no per-battery baseline
+  # cannot be attributed to anything and has to start over. This is the state a
+  # version upgrade lands in: the session was opened by a build that recorded
+  # only the pack total.
+  [[ -n "$window_start_energies" ]] || {
+    window_start_epoch=$now
+    window_start_energy_uwh=$current_energy
+    window_start_energies=$(capture_battery_energies)
+    window_reset_reason="battery-baseline-missing"
+    return 0
+  }
   elapsed=$((now - window_start_epoch))
   energy_used=$((window_start_energy_uwh - current_energy))
   ((elapsed > 0)) || return 0
@@ -526,12 +537,20 @@ record_discharge_window() {
     fi
     write_battery_rows "$elapsed"
   } >"$tmp_file"
-  mv -f -- "$tmp_file" "$history_file"
   window_start_epoch=$now
   window_start_energy_uwh=$current_energy
   window_start_energies=$(capture_battery_energies)
-  window_reset_reason=""
-  history_appended=1
+  if ((battery_rows_written > 0)); then
+    mv -f -- "$tmp_file" "$history_file"
+    window_reset_reason=""
+    history_appended=1
+  else
+    # No battery gave up measurable energy over the window. Say so rather than
+    # rewriting the file and reporting a successful sample that recorded
+    # nothing.
+    rm -f -- "$tmp_file"
+    window_reset_reason="no-battery-evidence"
+  fi
 }
 
 # One row per battery that actually gave up energy over the window.
@@ -542,6 +561,7 @@ record_discharge_window() {
 # windows in which it was the one doing the work.
 write_battery_rows() {
   local elapsed=$1 battery_dir name started ended used battery_draw
+  battery_rows_written=0
   for battery_dir in "${battery_dirs[@]}"; do
     name=${battery_dir##*/}
     started=$(battery_energy_at "$name" "$window_start_energies") || continue
@@ -555,11 +575,13 @@ write_battery_rows() {
     printf '%s\t%s\t%s\t%s%s\n' \
       "$now" "$discharge_session_id" "$(capture_one_battery_key "$battery_dir")" \
       "$battery_draw" "$(capture_battery_metrics "$battery_dir")"
+    battery_rows_written=$((battery_rows_written + 1))
   done
 }
 
 # Start or continue a sampling window only while running on battery.
 history_appended=0
+battery_rows_written=0
 if [[ $current_state == "on-battery" ]]; then
   if [[ -z "$discharge_session_id" || "$continuity" == 0 ]]; then
     discharge_session_id="$now"

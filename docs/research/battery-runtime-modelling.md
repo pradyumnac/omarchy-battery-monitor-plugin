@@ -205,3 +205,53 @@ the numeric prediction.
    <https://mlforsystems.org/assets/papers/neurips2022/paper24.pdf>
 9. Workload-aware mobile energy modelling example:
    <https://users.aalto.fi/~siekkine/pub/yu10greencom.pdf>
+
+## Open research directions
+
+Parked deliberately. Nothing here ships without a measurable held-out
+improvement from `make backtest`, per the rule above.
+
+### Per-battery calibration: is reported capacity honest?
+
+The projection divides reported energy by a learned draw. It therefore trusts
+`energy_full`, and on a worn cell that is exactly the number that stops being
+true — a battery reporting 12.09 Wh may deliver noticeably less.
+
+Schema v3 records `energy_now` and `energy_full` on every window, per battery,
+so the delivered energy between two charge levels can be compared against what
+the battery claimed to hold. The ratio is an effective-capacity factor,
+anchored to the battery's identity so it survives a swap.
+
+Open questions: how many windows are needed before the factor is stable;
+whether it should be applied to `at full` only or to the live projection too;
+and whether it drifts fast enough to need its own lookback.
+
+### Discharge-curve non-linearity, and whether it worsens with wear
+
+The projection is linear: `energy / draw`. Li-ion curves are flat across most
+of the range and bend near empty, so the linear form may break at low charge —
+and may break *earlier* on a degraded cell.
+
+This was previously unanswerable because nothing recorded where in the
+discharge a window sat. Schema v3 records `capacity_percent` and `voltage_now`
+per window, so the question is now a query rather than a guess: split backtest
+error by charge bucket, and split again by battery health.
+
+Do not implement a correction before that split shows one is needed. If the
+error is flat across buckets there is nothing here.
+
+### Continuous backtesting
+
+`make backtest` is a one-shot report today. The intent is for scoring to run
+continuously against each installed battery's accumulating evidence, so the
+estimator in use is the one that currently measures best *for that cell*
+rather than one chosen once and frozen.
+
+That needs, in rough order: a stable per-battery score that is cheap enough to
+recompute as windows arrive; a record of which estimator is selected per
+battery and why; and a guard against flapping between estimators whose scores
+are within noise of each other. The selection itself must stay auditable — a
+model that silently changes shape is worse than a slightly worse fixed one.
+
+`make export` writes the same history as CSV for exploring these questions in a
+notebook before any of it is committed to shell.
