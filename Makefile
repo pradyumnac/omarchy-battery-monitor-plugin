@@ -9,8 +9,10 @@ check:
 	bash -n service/battery-session-tracker.sh service/battery-session-monitor.sh service/power-supply.sh scripts/battery-session-preflight.sh scripts/install-session-tracker.sh scripts/uninstall-session-tracker.sh scripts/battery-intelligence-status.sh
 	# Service executables exist only after `make install`; verify the static timer here.
 	systemd-analyze verify service/battery-session-tracker.timer
+	# The flags below are Qt6-only, so prefer the Qt6 binary explicitly —
+	# `qmllint` on PATH may resolve to a Qt5 build that rejects them.
 	# shellcheck disable=SC1036,SC1088
-	qmllint_bin=$$(command -v qmllint 2>/dev/null || command -v /usr/lib/qt6/bin/qmllint 2>/dev/null || true); \
+	qmllint_bin=$$(command -v /usr/lib/qt6/bin/qmllint 2>/dev/null || command -v qmllint 2>/dev/null || true); \
 	if [ -n "$$qmllint_bin" ]; then \
 		"$$qmllint_bin" \
 			--import disable \
