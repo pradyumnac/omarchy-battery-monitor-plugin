@@ -65,6 +65,11 @@ field() {
     "$color" "$text" "$reset"
 }
 
+subfield() {
+  local label=$1 text=$2 color=${3-}
+  printf '      %b%-16s%b %b%s%b\n' "$dim" "$label" "$reset" "$color" "$text" "$reset"
+}
+
 format_duration() {
   local seconds=$1 minutes hours days
   minutes=$(((seconds + 59) / 60))
@@ -124,30 +129,86 @@ sampling_reason_label() {
   esac
 }
 
-# One line per battery: health against design capacity, full-charge energy, and
-# the live power flow while current moves.
-battery_line() {
-  local index=$1 health energy detail
+# One block per battery: who it is, then what it is doing, then what its own
+# evidence says about it. Identity comes first because two batteries in the
+# same machine are different hardware with different ages and capacities, and a
+# metric means little until you know which cell produced it.
+battery_block() {
+  local index=$1
+  local name=${view_bat_name[index]}
+  local vendor=${view_bat_vendor[index]}
+  local model=${view_bat_model[index]}
+  local serial=${view_bat_serial[index]}
   local full=${view_bat_energy_full_uwh[index]}
   local design=${view_bat_energy_design_uwh[index]}
   local power=${view_bat_power_now_uw[index]}
+  local state=${view_bat_model_state[index]}
+  local windows=${view_bat_windows[index]}
+  local sessions=${view_bat_sessions[index]}
+  local draw=${view_bat_typical_draw_mw[index]}
+  local identity detail health energy
+
+  # Trim the padding sysfs puts around some serials.
+  serial=${serial#"${serial%%[![:space:]]*}"}
+  serial=${serial%"${serial##*[![:space:]]}"}
+  identity=""
+  [[ -n $vendor ]] && identity+="$vendor "
+  [[ -n $model ]] && identity+="$model"
+  [[ -n $serial ]] && identity+=" · SN $serial"
+  [[ -n $identity ]] || identity="identity unavailable"
+  field "$name" "$identity"
 
   if ((design > 0)); then
     health="health $((full * 100 / design))%"
   else
     health="health N/A"
   fi
-  if ((full > 0)); then
-    energy=$(format_energy "$full")
-  else
-    energy="-"
-  fi
+  energy="-"
+  ((full > 0)) && energy=$(format_energy "$full")
+  detail="$health · $energy · ${view_bat_status[index]:-unknown}"
   case ${view_bat_status[index]} in
-  Discharging) detail=" · Discharging · draw $(format_power $((power / 1000)))" ;;
-  Charging) detail=" · Charging · charging power $(format_power $((power / 1000)))" ;;
-  *) detail="" ;;
+  Discharging) detail+=" · draw $(format_power $((power / 1000)))" ;;
+  Charging) detail+=" · charging at $(format_power $((power / 1000)))" ;;
   esac
-  printf '%s · %s%s' "$health" "$energy" "$detail"
+  ((view_bat_held[index] == 1)) && detail+=" · held at ${view_bat_end_threshold[index]}%"
+  subfield "Battery" "$detail"
+
+  case $state in
+  ready)
+    subfield "Model" "ready · $windows windows / $sessions sessions" "$green"
+    ;;
+  provisional)
+    subfield "Model" "provisional · $windows windows / $sessions sessions" "$yellow"
+    ;;
+  blocked-energy)
+    subfield "Model" "blocked · this battery reports no capacity" "$yellow"
+    ;;
+  unavailable)
+    subfield "Model" "unavailable · unsupported history format" "$red"
+    ;;
+  *)
+    local window_progress=$windows session_progress=$sessions
+    ((window_progress > BATTERY_MODEL_MIN_WINDOWS)) && window_progress=$BATTERY_MODEL_MIN_WINDOWS
+    ((session_progress > BATTERY_MODEL_MIN_SESSIONS)) && session_progress=$BATTERY_MODEL_MIN_SESSIONS
+    subfield "Model" \
+      "learning · $window_progress/$BATTERY_MODEL_MIN_WINDOWS windows · $session_progress/$BATTERY_MODEL_MIN_SESSIONS sessions" \
+      "$yellow"
+    ;;
+  esac
+
+  if ((draw > 0)); then
+    subfield "Typical draw" "$(format_power "$draw")"
+  fi
+  if ((view_bat_remaining_seconds[index] > 0)); then
+    subfield "From this level" "$(format_duration "${view_bat_remaining_seconds[index]}")"
+    subfield "At full" "$(format_duration "${view_bat_full_seconds[index]}")"
+    if ((view_bat_remaining_low_seconds[index] > 0 &&
+      view_bat_remaining_high_seconds[index] > view_bat_remaining_low_seconds[index])); then
+      subfield "Range" \
+        "$(format_duration "${view_bat_remaining_low_seconds[index]}") – $(format_duration "${view_bat_remaining_high_seconds[index]}") · p25–p75" \
+        "$dim"
+    fi
+  fi
 }
 
 heading
@@ -164,8 +225,22 @@ else
 fi
 
 for ((index = 0; index < ${#view_bat_name[@]}; index++)); do
-  field "${view_bat_name[index]}" "$(battery_line "$index")"
+  battery_block "$index"
 done
+
+# Batteries this machine has learned about that are not installed right now.
+# This is the only place their evidence is ever shown: it is never mixed into a
+# projection for a battery that is actually present.
+if ((${#view_absent_key[@]} > 0)); then
+  for ((index = 0; index < ${#view_absent_key[@]}; index++)); do
+    absent_label=${view_absent_key[index]//:/ }
+    absent_detail="${view_absent_windows[index]} window(s)"
+    if ((view_absent_last[index] > 0)); then
+      absent_detail+=" · last seen $(format_age $((view_generated_epoch - view_absent_last[index])))"
+    fi
+    field "Not installed" "$absent_label · $absent_detail" "$dim"
+  done
+fi
 
 window_progress=$view_model_windows
 session_progress=$view_model_sessions
@@ -231,68 +306,38 @@ if [[ $freshness != live ]]; then
   runtime_suffix=" (cached)"
 fi
 
+# The pack summary. Per-battery figures are above; this is their total, which
+# holds because these batteries discharge one after another rather than
+# together.
 case $view_model_state in
 ready | provisional)
   if [[ $view_model_state == provisional ]]; then
     runtime_color=$yellow
-    field "Model" "provisional · $view_model_windows windows / $view_model_sessions sessions$model_learned" "$yellow"
-    field "Confidence" "low · needs $learning_label" "$dim"
+    field "Pack model" "provisional · not every battery has its own evidence yet$model_learned" "$yellow"
   else
-    field "Model" "ready · $view_model_windows windows / $view_model_sessions sessions$model_learned" "$green"
+    field "Pack model" "ready$model_learned" "$green"
   fi
   if [[ $view_power_state == on-charge && $view_power_phase == full ]]; then
-    field "Usual runtime$runtime_suffix" "$(format_duration "$view_full_seconds") · battery full" "$runtime_color"
+    field "Pack runtime$runtime_suffix" "$(format_duration "$view_full_seconds") · battery full" "$runtime_color"
   elif [[ $view_power_state == on-charge ]]; then
     field "If unplugged now$runtime_suffix" "$(format_duration "$view_remaining_seconds")" "$runtime_color"
     field "At full" "$(format_duration "$view_full_seconds")"
   else
-    field "Usual remaining$runtime_suffix" "$(format_duration "$view_remaining_seconds")" "$runtime_color"
+    field "Pack remaining$runtime_suffix" "$(format_duration "$view_remaining_seconds")" "$runtime_color"
     field "At full" "$(format_duration "$view_full_seconds")"
   fi
-  if ((view_remaining_low_seconds > 0 && view_remaining_high_seconds > view_remaining_low_seconds)); then
-    field "Range" "$(format_duration "$view_remaining_low_seconds") – $(format_duration "$view_remaining_high_seconds") · p25–p75" "$dim"
-  fi
-  if ((view_recent_remaining_seconds > 0)); then
-    field "Right now" "$(format_duration "$view_recent_remaining_seconds") · $(format_power "$view_recent_draw_mw") over the last $view_recent_window_count windows" "$dim"
-  fi
-  field "Typical draw" "$(format_power "$view_typical_draw_mw")"
-  ;;
-blocked-energy)
-  field "Model" "blocked · current battery energy unavailable" "$yellow"
-  field "Evidence" "$view_model_windows windows / $view_model_sessions sessions" "$dim"
-  ;;
-blocked-runtime)
-  field "Model" "blocked · learned runtime unavailable" "$yellow"
-  field "Evidence" "$view_model_windows windows / $view_model_sessions sessions" "$dim"
   ;;
 unavailable)
-  field "Model" "unavailable · unsupported history format" "$red"
+  field "Pack model" "unavailable · unsupported history format" "$red"
   ;;
 *)
-  field "Model" "learning · $learning_label" "$yellow"
+  field "Pack model" "learning · no battery has enough of its own evidence yet" "$yellow"
   ;;
 esac
 
-# A swapped battery used to pass unremarked: the only signal was
-# window_reset_reason, which the next recorded window cleared. Attribution is
-# recorded per window now, so the change stays visible afterwards.
-if ((view_history_foreign > 0)); then
-  field "Battery set" \
-    "changed · $view_history_foreign of $view_model_windows windows were measured on a previous set" \
-    "$yellow"
-  if [[ $verbose == 1 && -n $view_previous_pack ]]; then
-    field "Previous set" "${view_previous_pack//,/, }" "$dim"
-  fi
-fi
-if ((view_history_unattributed > 0)); then
-  field "Unattributed" \
-    "$view_history_unattributed window(s) recorded before battery identity was tracked" \
-    "$dim"
-fi
-if ((view_pack_key_weak == 1)); then
-  field "Battery identity" \
-    "weak · this firmware reports no serial, so identical spare batteries cannot be told apart" \
-    "$yellow"
+if ((view_history_legacy > 0)); then
+  field "Legacy rows" \
+    "$view_history_legacy pack-level row(s) from an older schema · not usable per battery" "$dim"
 fi
 if ((view_history_archived > 0)); then
   field "History" "$view_history_recent recent · $view_history_archived archived" "$dim"

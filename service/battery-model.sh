@@ -47,12 +47,16 @@ readonly BATTERY_MODEL_RECENT_WINDOWS=4
 readonly BATTERY_MODEL_MIN_DRAW_MW=100
 readonly BATTERY_MODEL_MAX_DRAW_MW=120000
 
-# Version 2 added a fifth column: the identity of the battery set a window was
-# measured on. Version-1 rows stay readable and still count as draw evidence —
-# draw is a machine property — but they carry no identity, so they can never be
-# attributed to a set. The header is rewritten to v2 the next time a row is
-# appended.
-readonly BATTERY_MODEL_HISTORY_HEADER=$'# battery-discharge-history\tv2'
+# Schema history. Version 2 added the identity of the battery set a window was
+# measured on. Version 3 replaced the pack-level row with one row per battery,
+# carrying that battery's own draw and its full metric set, because a
+# projection for a cell must be built from that cell's own evidence.
+#
+# Version 1 and 2 rows stay readable, but they describe a pack rather than a
+# battery, so they can never be attributed to one. They are reported as legacy
+# and never modelled.
+readonly BATTERY_MODEL_HISTORY_HEADER=$'# battery-discharge-history\tv3'
+readonly BATTERY_MODEL_HISTORY_HEADER_V2=$'# battery-discharge-history\tv2'
 readonly BATTERY_MODEL_HISTORY_HEADER_V1=$'# battery-discharge-history\tv1'
 
 # The tracker state file's schema. v1 files carry no version key and also carry
@@ -62,25 +66,29 @@ readonly BATTERY_MODEL_HISTORY_HEADER_V1=$'# battery-discharge-history\tv1'
 readonly BATTERY_STATE_SCHEMA_VERSION=2
 
 # --- Loaded history --------------------------------------------------------
-# battery_model_load_history() writes every variable below. They are globals
-# rather than nameref outputs so one load can feed several readers.
+# battery_model_load_history() reads the file once and indexes every window by
+# the battery that measured it. battery_model_select_battery() then narrows the
+# working set to one battery, because a projection for a given cell must use
+# only that cell's own evidence.
 
-battery_model_state=""          # missing | unsupported | ready
-battery_model_total_rows=0      # valid rows in the file, any age
-battery_model_window_count=0    # valid rows inside the lookback
-battery_model_session_count=0   # distinct sessions inside the lookback
-battery_model_future_rows=0     # rows dated after `now`, ignored by the model
+battery_model_state=""               # missing | unsupported | ready
+battery_model_history_version=0
+battery_model_total_rows=0           # valid rows in the file, any age
+battery_model_future_rows=0          # rows dated after `now`
+battery_model_legacy_rows=0          # pack-level rows from schema v1 and v2
+declare -A battery_model_key_draws=()      # key -> space separated draws
+declare -A battery_model_key_sessions=()   # key -> space separated session ids
+declare -A battery_model_key_last=()       # key -> newest epoch
+declare -A battery_model_key_energy_full=()
+declare -A battery_model_key_cycles=()
+battery_model_keys=()                # every battery seen inside the lookback
+
+# Filled by battery_model_select_battery().
+battery_model_window_count=0
+battery_model_session_count=0
 battery_model_latest_epoch=0
-battery_model_latest_draw_mw=0
-battery_model_latest_capacity_uwh=0
-battery_model_draws=()          # in-window draws, ascending
-battery_model_recent_draws=()   # newest BATTERY_MODEL_RECENT_WINDOWS draws
-# Attribution of the evidence inside the lookback. Every row still counts as
-# draw evidence — draw belongs to the machine — but the split says which
-# battery set produced it, so a swap is visible instead of silent.
-battery_model_foreign_windows=0      # measured on a different, identified set
-battery_model_unattributed_windows=0 # version-1 rows, recorded before identity
-battery_model_previous_pack=""       # key of the most recent other set
+battery_model_draws=()               # selected battery's draws, ascending
+battery_model_recent_draws=()        # newest BATTERY_MODEL_RECENT_WINDOWS
 
 battery_model_history_valid() {
   local first_line
@@ -88,13 +96,36 @@ battery_model_history_valid() {
   # Read the header in bash rather than forking `head`: the view calls this on
   # every panel refresh.
   IFS= read -r first_line <"$1" 2>/dev/null || return 1
-  [[ $first_line == "$BATTERY_MODEL_HISTORY_HEADER" ||
-    $first_line == "$BATTERY_MODEL_HISTORY_HEADER_V1" ]]
+  case $first_line in
+  "$BATTERY_MODEL_HISTORY_HEADER") return 0 ;;
+  "$BATTERY_MODEL_HISTORY_HEADER_V2") return 0 ;;
+  "$BATTERY_MODEL_HISTORY_HEADER_V1") return 0 ;;
+  esac
+  return 1
+}
+
+# 3, 2, 1, or 0 when the file is missing or in a format this version cannot read.
+battery_model_history_format() {
+  local first_line
+  [[ -f "$1" ]] || {
+    printf '0'
+    return 0
+  }
+  IFS= read -r first_line <"$1" 2>/dev/null || {
+    printf '0'
+    return 0
+  }
+  case $first_line in
+  "$BATTERY_MODEL_HISTORY_HEADER") printf '3' ;;
+  "$BATTERY_MODEL_HISTORY_HEADER_V2") printf '2' ;;
+  "$BATTERY_MODEL_HISTORY_HEADER_V1") printf '1' ;;
+  *) printf '0' ;;
+  esac
 }
 
 # Sort a numeric array in place, ascending. Insertion sort with no subprocess:
-# the history file is capped at BATTERY_MODEL_RETENTION_ROWS, so this is always
-# cheaper than forking `sort`.
+# the history file is capped per battery, so this is always cheaper than
+# forking `sort`.
 battery_model_sort_numbers() {
   local -n _bm_array=$1
   local index candidate probe
@@ -107,91 +138,106 @@ battery_model_sort_numbers() {
   done
 }
 
-# Read the discharge history once and populate every battery_model_* global.
+# Read the discharge history once and index it by battery.
 # Usage: battery_model_load_history HISTORY_FILE NOW_EPOCH
 battery_model_load_history() {
-  local history_file=$1 now=$2 current_pack_key=${3-}
-  local kind first second third session pack index
-  local -A seen_sessions=()
+  local history_file=$1 now=$2
+  local kind epoch key draw session energy_full cycles
 
   battery_model_state="missing"
   battery_model_total_rows=0
-  battery_model_window_count=0
-  battery_model_session_count=0
   battery_model_future_rows=0
-  battery_model_latest_epoch=0
-  battery_model_latest_draw_mw=0
-  battery_model_latest_capacity_uwh=0
-  battery_model_draws=()
-  battery_model_recent_draws=()
-  battery_model_foreign_windows=0
-  battery_model_unattributed_windows=0
-  battery_model_previous_pack=""
+  battery_model_legacy_rows=0
+  battery_model_keys=()
+  battery_model_key_draws=()
+  battery_model_key_sessions=()
+  battery_model_key_last=()
+  battery_model_key_energy_full=()
+  battery_model_key_cycles=()
+  battery_model_select_battery ""
 
   [[ -f "$history_file" ]] || return 0
-  if ! battery_model_history_valid "$history_file"; then
+  battery_model_history_version=$(battery_model_history_format "$history_file")
+  if ((battery_model_history_version == 0)); then
     battery_model_state="unsupported"
     return 0
   fi
   battery_model_state="ready"
 
-  # One pass over the file. Each `D` line is a row inside the lookback, in file
-  # order, so the tail is the newest evidence; the trailing `S` line carries
-  # the counters that need the whole file to compute.
-  while IFS=$'\t' read -r kind first second third session pack; do
+  while IFS=$'\t' read -r kind epoch key draw session energy_full cycles; do
     case $kind in
     D)
-      # Draw is a property of the machine and its workload, so every row feeds
-      # the draw model whichever set measured it. Identity only decides how the
-      # evidence is attributed and reported.
-      if [[ -z $pack ]]; then
-        battery_model_unattributed_windows=$((battery_model_unattributed_windows + 1))
-      elif [[ -n $current_pack_key && $pack != "$current_pack_key" ]]; then
-        # Rows arrive oldest first, so this ends on the most recent other set.
-        battery_model_foreign_windows=$((battery_model_foreign_windows + 1))
-        battery_model_previous_pack=$pack
+      if [[ -z ${battery_model_key_draws[$key]+x} ]]; then
+        battery_model_keys+=("$key")
+        battery_model_key_draws["$key"]=""
+        battery_model_key_sessions["$key"]=""
       fi
-      battery_model_draws+=("$second")
-      battery_model_window_count=$((battery_model_window_count + 1))
-      if [[ -n $session && -z ${seen_sessions[$session]+x} ]]; then
-        seen_sessions["$session"]=1
-        battery_model_session_count=$((battery_model_session_count + 1))
-      fi
+      battery_model_key_draws["$key"]+="$draw "
+      battery_model_key_sessions["$key"]+="$session "
+      battery_model_key_last["$key"]=$epoch
+      battery_model_key_energy_full["$key"]=$energy_full
+      battery_model_key_cycles["$key"]=$cycles
       ;;
     S)
-      battery_model_total_rows=$first
-      battery_model_future_rows=$second
-      battery_model_latest_epoch=$third
-      ;;
-    L)
-      battery_model_latest_draw_mw=$first
-      battery_model_latest_capacity_uwh=$second
+      battery_model_total_rows=$epoch
+      battery_model_future_rows=$key
+      battery_model_legacy_rows=$draw
       ;;
     esac
   done < <(
-    awk -F '\t' -v now="$now" -v lookback="$BATTERY_MODEL_LOOKBACK_SECONDS" '
-      BEGIN { cutoff = now - lookback; total = future = latest = 0 }
-      $1 ~ /^[0-9]+$/ && $2 != "" && $3 ~ /^[1-9][0-9]*$/ && $4 ~ /^[1-9][0-9]*$/ {
+    awk -F '\t' -v now="$now" -v lookback="$BATTERY_MODEL_LOOKBACK_SECONDS" \
+      -v version="$battery_model_history_version" '
+      BEGIN { cutoff = now - lookback; total = future = legacy = 0 }
+      /^#/ { next }
+      $1 !~ /^[0-9]+$/ { next }
+      {
         total++
         if ($1 > now) { future++; next }
         if ($1 < cutoff) next
-        printf "D\t%s\t%s\t%s\t%s\t%s\n", $1, $3, $4, $2, $5
-        if ($1 >= latest) { latest = $1; last_draw = $3; last_capacity = $4 }
+        # Schema 1 and 2 record one row per pack, with no battery identity, so
+        # they can never be attributed to a cell. They are counted and reported,
+        # never modelled.
+        if (version < 3) { legacy++; next }
+        if ($3 == "" || $4 !~ /^[1-9][0-9]*$/) next
+        printf "D\t%s\t%s\t%s\t%s\t%s\t%s\n", $1, $3, $4, $2, $6, $11
       }
-      END {
-        printf "S\t%d\t%d\t%d\t\t\n", total, future, latest
-        printf "L\t%d\t%d\t0\t\t\n", last_draw + 0, last_capacity + 0
-      }
+      END { printf "S\t%d\t%d\t%d\t\t\t\n", total, future, legacy }
     ' "$history_file"
   )
+}
 
-  # The newest windows, captured in file order before the value sort below
-  # reorders them.
-  for ((index = ${#battery_model_draws[@]} - BATTERY_MODEL_RECENT_WINDOWS; index < ${#battery_model_draws[@]}; index++)); do
+# Narrow the working set to one battery. Every projection is made from the
+# evidence of the cell it is about; another battery's windows are never mixed in.
+battery_model_select_battery() {
+  local key=$1 draw session index
+  local -A seen=()
+
+  battery_model_window_count=0
+  battery_model_session_count=0
+  battery_model_latest_epoch=0
+  battery_model_draws=()
+  battery_model_recent_draws=()
+  [[ -n $key ]] || return 0
+  [[ -n ${battery_model_key_draws[$key]+x} ]] || return 0
+
+  for draw in ${battery_model_key_draws[$key]}; do
+    battery_model_draws+=("$draw")
+    battery_model_window_count=$((battery_model_window_count + 1))
+  done
+  for session in ${battery_model_key_sessions[$key]}; do
+    if [[ -z ${seen[$session]+x} ]]; then
+      seen["$session"]=1
+      battery_model_session_count=$((battery_model_session_count + 1))
+    fi
+  done
+  battery_model_latest_epoch=${battery_model_key_last[$key]:-0}
+
+  # Newest windows, in file order, before the value sort reorders them.
+  for ((index = ${#battery_model_draws[@]} - BATTERY_MODEL_RECENT_WINDOWS;
+    index < ${#battery_model_draws[@]}; index++)); do
     ((index >= 0)) || continue
     battery_model_recent_draws+=("${battery_model_draws[index]}")
   done
-
   battery_model_sort_numbers battery_model_draws
 }
 

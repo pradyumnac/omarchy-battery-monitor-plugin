@@ -131,6 +131,70 @@ capture_battery_fingerprint() {
 # each cell. Recorded with every window so evidence can be attributed to the
 # batteries that produced it, and so a swap is visible afterwards rather than
 # only in the instant it happens.
+# Every metric this battery publishes, as one history row's worth of fields.
+# All reads are `$(<file)`, so a full capture costs no subprocess. We record
+# more than the model uses today deliberately: the cheap moment to capture a
+# metric is while the battery is discharging, and a metric not recorded then is
+# gone for good.
+capture_battery_metrics() {
+  local battery_dir=$1 field value
+  local -a fields=(
+    energy_now energy_full energy_full_design
+    voltage_now power_now capacity cycle_count status
+  )
+  local out=""
+  for field in "${fields[@]}"; do
+    value=""
+    [[ -f "$battery_dir/$field" ]] && value=$(<"$battery_dir/$field")
+    value=${value//[$'\t\n\r']/ }
+    out+=$'\t'"$value"
+  done
+  printf '%s' "$out"
+}
+
+# This battery's identity key.
+capture_one_battery_key() {
+  local battery_dir=$1 name vendor="" model="" serial=""
+  name=${battery_dir##*/}
+  [[ -f "$battery_dir/manufacturer" ]] && vendor=$(<"$battery_dir/manufacturer")
+  [[ -f "$battery_dir/model_name" ]] && model=$(<"$battery_dir/model_name")
+  [[ -f "$battery_dir/serial_number" ]] && serial=$(<"$battery_dir/serial_number")
+  battery_model_battery_key "$name" "$vendor" "$model" "$serial"
+}
+
+# Energy stored in one battery, or empty when it cannot be read.
+capture_one_battery_energy() {
+  local battery_dir=$1 energy=""
+  [[ -f "$battery_dir/energy_now" ]] && energy=$(<"$battery_dir/energy_now")
+  [[ -f "$battery_dir/energy_now" ]] || {
+    [[ -f "$battery_dir/charge_now" ]] && energy=$(<"$battery_dir/charge_now")
+  }
+  is_nonnegative_integer "$energy" && printf '%s' "$energy"
+}
+
+# Per-battery energy at the window start, as NAME=ENERGY pairs.
+capture_battery_energies() {
+  local battery_dir energy result=""
+  for battery_dir in "${battery_dirs[@]}"; do
+    energy=$(capture_one_battery_energy "$battery_dir")
+    [[ -n $energy ]] || continue
+    [[ -z $result ]] || result+=","
+    result+="${battery_dir##*/}=$energy"
+  done
+  printf '%s' "$result"
+}
+
+battery_energy_at() {
+  local name=$1 pairs=$2 entry
+  local IFS=','
+  for entry in $pairs; do
+    [[ ${entry%%=*} == "$name" ]] || continue
+    printf '%s' "${entry#*=}"
+    return 0
+  done
+  return 1
+}
+
 capture_pack_key() {
   local battery_dir name vendor model serial
   local -a keys=()
@@ -170,9 +234,20 @@ prune_history() {
   tmp_file="$history_file.tmp.$$"
   {
     printf '%s\n' "$BATTERY_MODEL_HISTORY_HEADER"
-    awk -F '\t' -v cutoff="$cutoff" \
-      '$1 ~ /^[0-9]+$/ && $1 >= cutoff && $2 != "" && $3 ~ /^[1-9][0-9]*$/ && $4 ~ /^[1-9][0-9]*$/ { print }' \
-      "$history_file" | sort -n -k1,1 | tail -n "$BATTERY_MODEL_RETENTION_ROWS"
+    # Retention is per battery, not per file. A shared cap would let a heavily
+    # used cell evict the evidence of one that is swapped in only occasionally,
+    # which is exactly the pattern this history has to survive.
+    tail -n +2 -- "$history_file" | sort -n -k1,1 |
+      awk -F '\t' -v cutoff="$cutoff" -v keep="$BATTERY_MODEL_RETENTION_ROWS" '
+        $1 ~ /^[0-9]+$/ && $1 >= cutoff && $2 != "" && $3 != "" && $4 ~ /^[1-9][0-9]*$/ {
+          rows[++n] = $0
+          key[n] = $3
+        }
+        END {
+          # Walk newest first so the rows kept per battery are its most recent.
+          for (i = n; i >= 1; i--) if (++seen[key[i]] <= keep) keptrow[i] = 1
+          for (i = 1; i <= n; i++) if (keptrow[i]) print rows[i]
+        }'
   } >"$tmp_file"
   mv -f -- "$tmp_file" "$history_file"
 }
@@ -318,6 +393,7 @@ discharge_session_id=""
 window_start_epoch=0
 window_start_energy_uwh=0
 last_sample_energy_uwh=0
+window_start_energies=""
 window_reset_reason=""
 battery_fingerprint=""
 if [[ -f "$state_file" ]]; then
@@ -377,12 +453,13 @@ fi
 # battery-model.sh; this function owns only the on-disk round trip.
 # Sets history_appended=1 when a row was written.
 record_discharge_window() {
-  local current_energy elapsed energy_used draw history_file tmp_file
+  local current_energy elapsed energy_used draw history_file tmp_file history_format
   current_energy=$(capture_energy_now_uwh)
   if [[ ! "$current_energy" =~ ^[1-9][0-9]*$ ]]; then
     window_start_epoch=0
     window_start_energy_uwh=0
     last_sample_energy_uwh=0
+    window_start_energies=""
     window_reset_reason="energy-unavailable"
     return 0
   fi
@@ -390,6 +467,7 @@ record_discharge_window() {
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
     last_sample_energy_uwh=$current_energy
+    window_start_energies=$(capture_battery_energies)
     window_reset_reason="energy-increased"
     return 0
   fi
@@ -397,11 +475,13 @@ record_discharge_window() {
   [[ "$window_start_epoch" =~ ^[1-9][0-9]*$ ]] || {
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
+    window_start_energies=$(capture_battery_energies)
     return 0
   }
   [[ "$window_start_energy_uwh" =~ ^[1-9][0-9]*$ ]] || {
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
+    window_start_energies=$(capture_battery_energies)
     return 0
   }
   elapsed=$((now - window_start_epoch))
@@ -411,6 +491,7 @@ record_discharge_window() {
   if ((energy_used <= 0)); then
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
+    window_start_energies=$(capture_battery_energies)
     window_reset_reason="no-energy-used"
     return 0
   fi
@@ -418,36 +499,63 @@ record_discharge_window() {
   if ! battery_model_draw_plausible "$draw"; then
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
+    window_start_energies=$(capture_battery_energies)
     window_reset_reason="implausible-draw"
     return 0
   fi
 
   history_file="$state_dir/discharge-history.tsv"
+  history_format=$(battery_model_history_format "$history_file")
   if [[ -f "$history_file" ]] && ! battery_model_history_valid "$history_file"; then
     window_start_epoch=$now
     window_start_energy_uwh=$current_energy
+    window_start_energies=$(capture_battery_energies)
     window_reset_reason="history-schema-unsupported"
     return 0
   fi
   umask 077
   tmp_file="$history_file.tmp.$$"
   {
-    if [[ -f "$history_file" ]]; then
-      # Rewrite the header to v2 and keep every existing row. Version-1 rows
-      # simply have no identity column; they stay valid draw evidence.
-      printf '%s\n' "$BATTERY_MODEL_HISTORY_HEADER"
+    printf '%s\n' "$BATTERY_MODEL_HISTORY_HEADER"
+    # Existing rows are carried over only when they are already per battery.
+    # Schema 1 and 2 recorded one row per pack with no battery identity, so
+    # they can never be attributed to a cell and are dropped at this point
+    # rather than kept as rows the model would have to skip forever.
+    if [[ -f "$history_file" ]] && ((history_format == 3)); then
       tail -n +2 -- "$history_file"
-    else
-      printf '%s\n' "$BATTERY_MODEL_HISTORY_HEADER"
     fi
-    printf '%s\t%s\t%s\t%s\t%s\n' "$now" "$discharge_session_id" "$draw" \
-      "$(capture_energy_capacity_uwh)" "$(capture_pack_key)"
+    write_battery_rows "$elapsed"
   } >"$tmp_file"
   mv -f -- "$tmp_file" "$history_file"
   window_start_epoch=$now
   window_start_energy_uwh=$current_energy
+  window_start_energies=$(capture_battery_energies)
   window_reset_reason=""
   history_appended=1
+}
+
+# One row per battery that actually gave up energy over the window.
+#
+# These batteries discharge in sequence, not together: while one supplies the
+# system the other sits at zero. Recording a row for an idle battery would bury
+# its real draw under zeros, so a battery only contributes evidence for the
+# windows in which it was the one doing the work.
+write_battery_rows() {
+  local elapsed=$1 battery_dir name started ended used battery_draw
+  for battery_dir in "${battery_dirs[@]}"; do
+    name=${battery_dir##*/}
+    started=$(battery_energy_at "$name" "$window_start_energies") || continue
+    ended=$(capture_one_battery_energy "$battery_dir")
+    [[ -n $ended ]] || continue
+    [[ $started =~ ^[0-9]+$ ]] || continue
+    ((started > ended)) || continue
+    used=$((started - ended))
+    battery_draw=$(battery_model_window_draw_mw "$used" "$elapsed") || continue
+    battery_model_draw_plausible "$battery_draw" || continue
+    printf '%s\t%s\t%s\t%s%s\n' \
+      "$now" "$discharge_session_id" "$(capture_one_battery_key "$battery_dir")" \
+      "$battery_draw" "$(capture_battery_metrics "$battery_dir")"
+  done
 }
 
 # Start or continue a sampling window only while running on battery.
@@ -458,6 +566,7 @@ if [[ $current_state == "on-battery" ]]; then
     window_start_epoch=$now
     window_start_energy_uwh=$(capture_energy_now_uwh)
     last_sample_energy_uwh=$window_start_energy_uwh
+    window_start_energies=$(capture_battery_energies)
   fi
   record_discharge_window
 else
@@ -465,6 +574,7 @@ else
   window_start_epoch=0
   window_start_energy_uwh=0
   last_sample_energy_uwh=0
+  window_start_energies=""
   window_reset_reason=""
 fi
 
@@ -496,6 +606,7 @@ tmp_file="$state_file.tmp.$$"
   printf 'discharge_session_id=%q\n' "$discharge_session_id"
   printf 'window_start_epoch=%q\n' "$window_start_epoch"
   printf 'window_start_energy_uwh=%q\n' "$window_start_energy_uwh"
+  printf 'window_start_energies=%q\n' "$window_start_energies"
   printf 'last_sample_energy_uwh=%q\n' "$last_sample_energy_uwh"
   printf 'window_reset_reason=%q\n' "$window_reset_reason"
   printf 'battery_fingerprint=%q\n' "$battery_fingerprint"

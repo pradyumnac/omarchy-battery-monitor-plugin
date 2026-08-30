@@ -56,9 +56,8 @@ function emptyView() {
     remainingHighSeconds: 0,
     recentDrawMw: 0,
     recentRemainingSeconds: 0,
-    foreignPackWindows: 0,
-    unattributedWindows: 0,
-    previousPack: "",
+    legacyRows: 0,
+    absentBatteries: [],
     packKey: "",
     packKeyWeak: false,
     uptimeSeconds: 0,
@@ -125,9 +124,7 @@ function parseView(raw) {
   var history = parsed.history || {};
   // Evidence recorded on a battery set that is no longer installed. Non-zero
   // means the pack changed and earlier windows stopped counting.
-  view.foreignPackWindows = viewNumber(history.foreign_pack);
-  view.unattributedWindows = viewNumber(history.unattributed);
-  view.previousPack = String(history.previous_pack || "");
+  view.legacyRows = viewNumber(history.legacy);
   var sampling = parsed.sampling || {};
   view.packKey = String(sampling.pack_key || "");
   view.packKeyWeak = sampling.pack_key_weak === true;
@@ -140,12 +137,27 @@ function parseView(raw) {
   }
   view.activeProfile = String(profiles.active || "");
 
+  // Batteries this machine has evidence for that are not installed. Reported
+  // so a swapped cell stays visible; never part of any projection.
+  var absent = Array.isArray(parsed.absent_batteries)
+    ? parsed.absent_batteries
+    : [];
+  for (var a = 0; a < absent.length; a++) {
+    var entry = absent[a] || {};
+    view.absentBatteries.push({
+      key: String(entry.key || ""),
+      windows: viewNumber(entry.windows),
+      lastSeenEpoch: viewNumber(entry.last_seen_epoch),
+    });
+  }
+
   // Keyed by sysfs name, which is what UPower reports as nativePath.
   var batteries = Array.isArray(parsed.batteries) ? parsed.batteries : [];
   for (var j = 0; j < batteries.length; j++) {
     var battery = batteries[j] || {};
     var name = String(battery.name || "");
     if (!name) continue;
+    var batteryModel = battery.model || {};
     view.batteries[name] = {
       status: String(battery.status || ""),
       percentage: viewNumber(battery.percent),
@@ -154,6 +166,18 @@ function parseView(raw) {
       vendor: String(battery.vendor || ""),
       endThreshold: viewNumber(battery.end_threshold_percent),
       held: battery.held === true,
+      key: String(battery.key || ""),
+      // This battery's own model, built only from its own windows.
+      model: {
+        state: String(batteryModel.state || "learning"),
+        windows: viewNumber(batteryModel.windows),
+        sessions: viewNumber(batteryModel.sessions),
+        typicalDrawMw: viewNumber(batteryModel.typical_draw_mw),
+        remainingSeconds: viewNumber(batteryModel.remaining_seconds),
+        fullSeconds: viewNumber(batteryModel.full_seconds),
+        remainingLowSeconds: viewNumber(batteryModel.remaining_low_seconds),
+        remainingHighSeconds: viewNumber(batteryModel.remaining_high_seconds),
+      },
     };
   }
   return view;

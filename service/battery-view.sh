@@ -74,11 +74,14 @@ view_history_total=0
 view_history_recent=0
 view_history_archived=0
 view_history_future=0
-view_history_foreign=0        # windows recorded on a different, identified set
-view_history_unattributed=0   # version-1 rows, recorded before identity tracking
-view_previous_pack=""         # key of the most recent other set
+view_history_legacy=0         # pack-level rows from schema v1 and v2
 view_pack_key=""              # identity of the set installed now
 view_pack_key_weak=0          # 1 when no serial separates identical spares
+# Batteries this machine has evidence for that are not installed right now.
+# Reported so a swapped-out cell is visible; never used for a projection.
+view_absent_key=()
+view_absent_windows=()
+view_absent_last=()
 view_uptime_seconds=0
 view_active_profile=""
 view_profiles=()
@@ -95,6 +98,17 @@ view_bat_vendor=()
 view_bat_end_threshold=()
 view_bat_held=()          # parked at its own configured charge cap
 view_bat_serial=()
+# One model per battery: a projection for a cell is built from that cell's own
+# evidence, never from another's.
+view_bat_key=()
+view_bat_model_state=()
+view_bat_windows=()
+view_bat_sessions=()
+view_bat_typical_draw_mw=()
+view_bat_remaining_seconds=()
+view_bat_full_seconds=()
+view_bat_remaining_low_seconds=()
+view_bat_remaining_high_seconds=()
 
 # --- Helpers ---------------------------------------------------------------
 
@@ -183,7 +197,7 @@ battery_view_collect_state() {
 # panel shows, so no consumer forks `cat` per battery field.
 battery_view_collect_batteries() {
   local battery_dir name status capacity energy full design power threshold
-  local present cycles model vendor serial
+  local present cycles model vendor serial battery_key
   local charging=0 full_count=0 held=0 count=0
   local -a pack_keys=()
 
@@ -234,7 +248,9 @@ battery_view_collect_batteries() {
     view_bat_model+=("$model")
     view_bat_vendor+=("$vendor")
     view_bat_serial+=("$serial")
-    pack_keys+=("$(battery_model_battery_key "$name" "$vendor" "$model" "$serial")")
+    battery_key=$(battery_model_battery_key "$name" "$vendor" "$model" "$serial")
+    view_bat_key+=("$battery_key")
+    pack_keys+=("$battery_key")
     view_bat_end_threshold+=("$threshold")
     if battery_model_threshold_held "$status" "$capacity" "$threshold"; then
       view_bat_held+=(1)
@@ -295,59 +311,115 @@ battery_view_collect_batteries() {
   fi
 }
 
-# The learned model: evidence gate, typical draw, projection, and band.
+# The learned model, one per battery.
+#
+# A projection answers "how long will this cell last from where it is now", so
+# it is built from that cell's own windows. Another battery's evidence is never
+# mixed in: it describes a different capacity, a different age, and a different
+# discharge curve. The pack figure is the sum of the per-battery projections,
+# which holds because these batteries discharge in sequence rather than
+# together — while one supplies the system the other sits idle.
 battery_view_collect_model() {
-  local history_file=$1 confidence p25 p75
+  local history_file=$1
+  local index key confidence draw p25 p75 energy_now energy_full
+  local ready_count=0 modelled=0 present_count=${#view_bat_name[@]}
+  local absent
 
-  # The installed set's identity is what each row's recorded identity is
-  # checked against, so a swap becomes visible instead of silent.
-  battery_model_load_history "$history_file" "$view_generated_epoch" \
-    "$view_pack_key"
+  battery_model_load_history "$history_file" "$view_generated_epoch"
   view_history_state=$battery_model_state
   view_history_total=$battery_model_total_rows
-  view_history_recent=$battery_model_window_count
   view_history_future=$battery_model_future_rows
-  view_history_foreign=$battery_model_foreign_windows
-  view_history_unattributed=$battery_model_unattributed_windows
-  view_previous_pack=$battery_model_previous_pack
-  view_history_archived=$((battery_model_total_rows - battery_model_window_count -
-    battery_model_future_rows))
+  view_history_legacy=$battery_model_legacy_rows
+
+  for ((index = 0; index < present_count; index++)); do
+    key=${view_bat_key[index]}
+    energy_now=${view_bat_energy_now_uwh[index]}
+    energy_full=${view_bat_energy_full_uwh[index]}
+    battery_model_select_battery "$key"
+
+    view_bat_windows+=("$battery_model_window_count")
+    view_bat_sessions+=("$battery_model_session_count")
+    ((battery_model_latest_epoch > view_model_updated_epoch)) &&
+      view_model_updated_epoch=$battery_model_latest_epoch
+    view_history_recent=$((view_history_recent + battery_model_window_count))
+
+    confidence=$(battery_model_confidence)
+    draw=0
+    if [[ $confidence == ready || $confidence == provisional ]]; then
+      draw=$(battery_model_median battery_model_draws)
+    fi
+    if ((draw <= 0)); then
+      view_bat_model_state+=("$confidence")
+      view_bat_typical_draw_mw+=(0)
+      view_bat_remaining_seconds+=(0)
+      view_bat_full_seconds+=(0)
+      view_bat_remaining_low_seconds+=(0)
+      view_bat_remaining_high_seconds+=(0)
+      continue
+    fi
+    if ((energy_full <= 0)); then
+      view_bat_model_state+=("blocked-energy")
+      view_bat_typical_draw_mw+=("$draw")
+      view_bat_remaining_seconds+=(0)
+      view_bat_full_seconds+=(0)
+      view_bat_remaining_low_seconds+=(0)
+      view_bat_remaining_high_seconds+=(0)
+      continue
+    fi
+
+    p25=$(battery_model_percentile battery_model_draws 25)
+    p75=$(battery_model_percentile battery_model_draws 75)
+    view_bat_model_state+=("$confidence")
+    view_bat_typical_draw_mw+=("$draw")
+    view_bat_remaining_seconds+=("$(battery_model_project_seconds "$energy_now" "$draw")")
+    view_bat_full_seconds+=("$(battery_model_project_seconds "$energy_full" "$draw")")
+    # A heavier draw buys less time, so the p75 draw sets the low edge.
+    view_bat_remaining_low_seconds+=("$(battery_model_project_seconds "$energy_now" "$p75")")
+    view_bat_remaining_high_seconds+=("$(battery_model_project_seconds "$energy_now" "$p25")")
+
+    modelled=$((modelled + 1))
+    [[ $confidence == ready ]] && ready_count=$((ready_count + 1))
+    view_remaining_seconds=$((view_remaining_seconds + view_bat_remaining_seconds[index]))
+    view_full_seconds=$((view_full_seconds + view_bat_full_seconds[index]))
+    view_remaining_low_seconds=$((view_remaining_low_seconds + view_bat_remaining_low_seconds[index]))
+    view_remaining_high_seconds=$((view_remaining_high_seconds + view_bat_remaining_high_seconds[index]))
+    view_typical_draw_mw=$((view_typical_draw_mw + draw))
+    view_model_windows=$((view_model_windows + battery_model_window_count))
+    ((battery_model_session_count > view_model_sessions)) &&
+      view_model_sessions=$battery_model_session_count
+  done
+
+  # The pack is only as certain as its least certain modelled battery.
+  if [[ $battery_model_state == unsupported ]]; then
+    view_model_state="unavailable"
+  elif ((present_count == 0 || modelled == 0)); then
+    view_model_state="learning"
+  elif ((ready_count == present_count)); then
+    view_model_state="ready"
+  else
+    view_model_state="provisional"
+  fi
+
+  # Every other battery this machine has evidence for. Reported so a swapped
+  # cell stays visible; never mixed into a projection.
+  for key in ${battery_model_keys[@]+"${battery_model_keys[@]}"}; do
+    absent=1
+    for ((index = 0; index < present_count; index++)); do
+      [[ ${view_bat_key[index]} == "$key" ]] && absent=0 && break
+    done
+    ((absent == 1)) || continue
+    battery_model_select_battery "$key"
+    view_absent_key+=("$key")
+    view_absent_windows+=("$battery_model_window_count")
+    view_absent_last+=("$battery_model_latest_epoch")
+    # Their windows are still inside the lookback, so they are recent evidence
+    # about this machine even though no projection may use them.
+    view_history_recent=$((view_history_recent + battery_model_window_count))
+  done
+
+  view_history_archived=$((view_history_total - view_history_recent -
+    view_history_future - view_history_legacy))
   ((view_history_archived >= 0)) || view_history_archived=0
-  view_model_windows=$battery_model_window_count
-  view_model_sessions=$battery_model_session_count
-  view_model_updated_epoch=$battery_model_latest_epoch
-  view_recent_window_count=${#battery_model_recent_draws[@]}
-
-  confidence=$(battery_model_confidence)
-  view_model_state=$confidence
-  [[ $confidence == ready || $confidence == provisional ]] || return 0
-
-  view_typical_draw_mw=$(battery_model_median battery_model_draws)
-  if ((view_typical_draw_mw <= 0)); then
-    view_model_state="blocked-runtime"
-    return 0
-  fi
-  if ((view_energy_capacity_uwh <= 0)); then
-    view_model_state="blocked-energy"
-    return 0
-  fi
-
-  view_full_seconds=$(battery_model_project_seconds "$view_energy_capacity_uwh" "$view_typical_draw_mw")
-  view_remaining_seconds=$(battery_model_project_seconds "$view_energy_now_uwh" "$view_typical_draw_mw")
-
-  # A heavier draw buys less time, so the p75 draw is the low edge of the band.
-  p25=$(battery_model_percentile battery_model_draws 25)
-  p75=$(battery_model_percentile battery_model_draws 75)
-  view_remaining_high_seconds=$(battery_model_project_seconds "$view_energy_now_uwh" "$p25")
-  view_remaining_low_seconds=$(battery_model_project_seconds "$view_energy_now_uwh" "$p75")
-
-  # "Right now": the newest few windows, which track a workload shift within
-  # the hour that a 30-day median cannot see.
-  if ((view_recent_window_count > 0)); then
-    view_recent_draw_mw=$(battery_model_mean battery_model_recent_draws)
-    view_recent_remaining_seconds=$(battery_model_project_seconds \
-      "$view_energy_now_uwh" "$view_recent_draw_mw")
-  fi
 }
 
 battery_view_collect_freshness() {
@@ -406,7 +478,7 @@ battery_view_json_bool() {
 
 battery_view_json_batteries() {
   local -n _bv_bat_out=$1
-  local index separator="" name status cycles model vendor held
+  local index separator="" name status cycles model vendor held key state
   _bv_bat_out=""
   for ((index = 0; index < ${#view_bat_name[@]}; index++)); do
     battery_view_json_string name "${view_bat_name[index]}"
@@ -415,7 +487,9 @@ battery_view_json_batteries() {
     battery_view_json_string model "${view_bat_model[index]}"
     battery_view_json_string vendor "${view_bat_vendor[index]}"
     battery_view_json_bool held "${view_bat_held[index]}"
-    printf -v _bv_bat_out '%s%s\n    {"name": %s, "status": %s, "percent": %s, "energy_now_uwh": %s, "energy_full_uwh": %s, "energy_full_design_uwh": %s, "power_now_uw": %s, "cycle_count": %s, "model": %s, "vendor": %s, "end_threshold_percent": %s, "held": %s}' \
+    battery_view_json_string key "${view_bat_key[index]}"
+    battery_view_json_string state "${view_bat_model_state[index]}"
+    printf -v _bv_bat_out '%s%s\n    {"name": %s, "status": %s, "percent": %s, "energy_now_uwh": %s, "energy_full_uwh": %s, "energy_full_design_uwh": %s, "power_now_uw": %s, "cycle_count": %s, "model": %s, "vendor": %s, "end_threshold_percent": %s, "held": %s, "key": %s, "model": {"state": %s, "windows": %s, "sessions": %s, "typical_draw_mw": %s, "remaining_seconds": %s, "full_seconds": %s, "remaining_low_seconds": %s, "remaining_high_seconds": %s}}' \
       "$_bv_bat_out" "$separator" "$name" "$status" \
       "${view_bat_percent[index]}" \
       "${view_bat_energy_now_uwh[index]}" \
@@ -423,10 +497,31 @@ battery_view_json_batteries() {
       "${view_bat_energy_design_uwh[index]}" \
       "${view_bat_power_now_uw[index]}" \
       "$cycles" "$model" "$vendor" \
-      "${view_bat_end_threshold[index]}" "$held"
+      "${view_bat_end_threshold[index]}" "$held" "$key" "$state" \
+      "${view_bat_windows[index]}" "${view_bat_sessions[index]}" \
+      "${view_bat_typical_draw_mw[index]}" \
+      "${view_bat_remaining_seconds[index]}" "${view_bat_full_seconds[index]}" \
+      "${view_bat_remaining_low_seconds[index]}" \
+      "${view_bat_remaining_high_seconds[index]}"
     separator=","
   done
   [[ -n $separator ]] && _bv_bat_out+=$'\n  '
+  return 0
+}
+
+# Batteries with recorded evidence that are not installed now.
+battery_view_json_absent() {
+  local -n _bv_absent_out=$1
+  local index separator="" key
+  _bv_absent_out=""
+  for ((index = 0; index < ${#view_absent_key[@]}; index++)); do
+    battery_view_json_string key "${view_absent_key[index]}"
+    printf -v _bv_absent_out '%s%s\n    {"key": %s, "windows": %s, "last_seen_epoch": %s}' \
+      "$_bv_absent_out" "$separator" "$key" \
+      "${view_absent_windows[index]}" "${view_absent_last[index]}"
+    separator=","
+  done
+  [[ -n $separator ]] && _bv_absent_out+=$'\n  '
   return 0
 }
 
@@ -446,7 +541,7 @@ battery_view_emit_json() {
   local power_state power_phase ac_online since_at_least
   local model_state history_state session_id reset_reason fingerprint
   local freshness batteries profiles active_profile sysfs_available
-  local previous_pack pack_key pack_key_weak
+  local pack_key pack_key_weak absent
 
   battery_view_json_string power_state "$view_power_state"
   battery_view_json_string power_phase "$view_power_phase"
@@ -459,11 +554,11 @@ battery_view_emit_json() {
   battery_view_json_string reset_reason "$view_window_reset_reason"
   battery_view_json_string fingerprint "$view_battery_fingerprint"
   battery_view_json_string freshness "$view_freshness"
-  battery_view_json_string previous_pack "$view_previous_pack"
   battery_view_json_string pack_key "$view_pack_key"
   battery_view_json_bool pack_key_weak "$view_pack_key_weak"
   battery_view_json_string active_profile "$view_active_profile"
   battery_view_json_batteries batteries
+  battery_view_json_absent absent
   battery_view_json_profiles profiles
 
   printf '{\n'
@@ -484,10 +579,9 @@ battery_view_emit_json() {
     "$view_remaining_low_seconds" "$view_remaining_high_seconds" \
     "$view_recent_draw_mw" "$view_recent_remaining_seconds" \
     "$view_recent_window_count" "$view_model_updated_epoch"
-  printf '  "history": {"state": %s, "total": %s, "recent": %s, "archived": %s, "future": %s, "foreign_pack": %s, "unattributed": %s, "previous_pack": %s},\n' \
+  printf '  "history": {"state": %s, "total": %s, "recent": %s, "archived": %s, "future": %s, "legacy": %s},\n' \
     "$history_state" "$view_history_total" "$view_history_recent" \
-    "$view_history_archived" "$view_history_future" \
-    "$view_history_foreign" "$view_history_unattributed" "$previous_pack"
+    "$view_history_archived" "$view_history_future" "$view_history_legacy"
   printf '  "sampling": {"session_id": %s, "window_start_epoch": %s, "window_seconds": %s, "window_target_seconds": %s, "reset_reason": %s, "fingerprint": %s, "pack_key": %s, "pack_key_weak": %s},\n' \
     "$session_id" "$view_window_start_epoch" "$view_window_seconds" \
     "$BATTERY_MODEL_WINDOW_SECONDS" "$reset_reason" "$fingerprint" \
@@ -495,6 +589,7 @@ battery_view_emit_json() {
   printf '  "tracker": {"last_observed_epoch": %s, "age_seconds": %s, "freshness": %s},\n' \
     "$view_last_observed_epoch" "$view_tracker_age_seconds" "$freshness"
   printf '  "batteries": [%s],\n' "$batteries"
+  printf '  "absent_batteries": [%s],\n' "$absent"
   printf '  "profiles": {"available": [%s], "active": %s},\n' \
     "$profiles" "$active_profile"
   printf '  "system": {"uptime_seconds": %s}\n' "$view_uptime_seconds"
