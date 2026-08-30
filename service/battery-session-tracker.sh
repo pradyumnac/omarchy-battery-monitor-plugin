@@ -110,19 +110,27 @@ capture_energy_now_uwh() {
   printf '%s' "$result"
 }
 
+# What has to change before an open sampling window is thrown away.
+#
+# Deliberately identity plus measurement mode, and deliberately NOT capacity.
+# A cell recalibrates its reported energy_full as it deep-discharges — this
+# hardware moved 26.00 Wh to 26.39 Wh inside one session — and a fingerprint
+# built on capacity reads every such adjustment as a battery swap. That
+# discarded the open window each time, so a battery could discharge for hours
+# and record no evidence at all.
+#
+# Measurement mode stays: a battery that stops reporting energy_* and starts
+# reporting charge_* really has invalidated the accounting mid-window.
 capture_battery_fingerprint() {
-  local battery_dir name capacity mode result=""
+  local battery_dir mode result=""
   for battery_dir in "${battery_dirs[@]}"; do
-    name=${battery_dir##*/}
-    capacity=$(capture_battery_capacity "$battery_dir")
-    [[ -n "$capacity" ]] || return 0
     if [[ -f "$battery_dir/energy_now" ]]; then
       mode="energy"
     else
       mode="unsupported"
     fi
     [[ -z "$result" ]] || result+=","
-    result+="$name:$mode:$capacity"
+    result+="$(capture_one_battery_key "$battery_dir"):$mode"
   done
   printf '%s' "$result"
 }
@@ -210,16 +218,6 @@ capture_pack_key() {
   done
   ((${#keys[@]} > 0)) || return 0
   battery_model_pack_key "${keys[@]}"
-}
-
-capture_battery_capacity() {
-  local battery_dir=$1 capacity=""
-  if [[ -f "$battery_dir/energy_full" ]]; then
-    capacity=$(<"$battery_dir/energy_full")
-  elif [[ -f "$battery_dir/charge_full" ]]; then
-    capacity=$(<"$battery_dir/charge_full")
-  fi
-  is_nonnegative_integer "$capacity" && ((capacity > 0)) && printf '%s' "$capacity"
 }
 
 # Trim the history to the retention rules. Only ever called after a row was
