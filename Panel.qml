@@ -71,8 +71,11 @@ Panel {
     return {
       Charging: UPowerDeviceState.Charging,
       Discharging: UPowerDeviceState.Discharging,
+      Empty: UPowerDeviceState.Empty,
       FullyCharged: UPowerDeviceState.FullyCharged,
-      PendingCharge: UPowerDeviceState.PendingCharge
+      PendingCharge: UPowerDeviceState.PendingCharge,
+      PendingDischarge: UPowerDeviceState.PendingDischarge,
+      Unknown: UPowerDeviceState.Unknown
     }
   }
 
@@ -298,7 +301,7 @@ Panel {
 
   Process {
     id: batDetailsProc
-    command: ["sh", "-c", "for b in /sys/class/power_supply/BAT*; do [ -d \"$b\" ] && echo \"$(basename \"$b\")\t$(cat \"$b/cycle_count\" 2>/dev/null || echo '')\t$(cat \"$b/model_name\" 2>/dev/null || echo '')\t$(cat \"$b/manufacturer\" 2>/dev/null || echo '')\"; done"]
+    command: ["sh", "-c", "for b in /sys/class/power_supply/BAT*; do [ -d \"$b\" ] && echo \"$(basename \"$b\")\t$(cat \"$b/cycle_count\" 2>/dev/null || echo '')\t$(cat \"$b/model_name\" 2>/dev/null || echo '')\t$(cat \"$b/manufacturer\" 2>/dev/null || echo '')\t$(cat \"$b/status\" 2>/dev/null || echo '')\t$(cat \"$b/capacity\" 2>/dev/null || echo '')\t$(cat \"$b/charge_control_end_threshold\" 2>/dev/null || echo '')\"; done"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -310,7 +313,10 @@ Panel {
             map[parts[0]] = {
               cycles: parts[1] || "",
               model: parts[2] || "",
-              vendor: parts[3] || ""
+              vendor: parts[3] || "",
+              status: parts[4] || "",
+              percentage: Number(parts[5] || 0),
+              endThreshold: Number(parts[6] || 0)
             }
           }
         }
@@ -613,6 +619,10 @@ Panel {
                 return v || m
               }
               readonly property string stateIcon: Model.deviceStateIcon(modelData, root.upowerStates())
+              readonly property bool stateIconThresholdActive: extra.status === "Not charging"
+                && extra.endThreshold > 0 && extra.percentage >= extra.endThreshold
+              readonly property color stateIconColor: Model.deviceStateIconColor(
+                modelData, stateIconThresholdActive, root.upowerStates())
               readonly property string rateStr: modelData.changeRate > 0.05 ? " (" + modelData.changeRate.toFixed(1) + "W)" : ""
               readonly property string healthStr: {
                 if (!modelData.healthSupported || modelData.healthPercentage <= 0) {
@@ -702,7 +712,7 @@ Panel {
                       text: batCard.stateIcon
                       font.family: root.bar.fontFamily
                       font.pixelSize: Style.font.bodySmall
-                      color: root.bar.foreground
+                      color: batCard.stateIconColor
                     }
                     Text {
                       text: "♥ " + batCard.healthStr

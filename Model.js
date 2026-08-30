@@ -110,14 +110,21 @@ function deviceStateString(device, states) {
 }
 
 function deviceStateIcon(device, states) {
-  if (!device || !device.isPresent) return "󰂎";
   var s = states || {};
-  if (device.state === s.Charging) return "󰂆";
-  if (device.state === s.PendingCharge) return "󰂄";
-  if (device.state === s.Discharging) return "󰂀";
-  if (device.state === s.FullyCharged) return "󰂅";
-  if (device.state === s.Empty) return "󰂎";
-  return "󰂄";
+  if (!device || !device.isPresent || device.state === s.Unknown) return "󰀦";
+  if (device.state === s.Charging) return "ϟ";
+  if (device.state === s.Discharging) return "↓";
+  return "󰁹";
+}
+
+function deviceStateIconColor(device, thresholdActive, states) {
+  var fraction = batteryFraction(device);
+  var s = states || {};
+  if ((device && device.state === s.Empty) || fraction < 0.05) return "#ef4444";
+  if (fraction < 0.2) return "#eab308";
+  if (thresholdActive) return "#f97316";
+  if (device && device.state === s.FullyCharged) return "#22c55e";
+  return "white";
 }
 
 function deviceBatteryIcon(device, states) {
@@ -314,6 +321,7 @@ if (typeof module === "object" && module !== null) {
     modeLabel: modeLabel,
     deviceStateString: deviceStateString,
     deviceStateIcon: deviceStateIcon,
+    deviceStateIconColor: deviceStateIconColor,
     deviceBatteryIcon: deviceBatteryIcon,
     getLaptopBatteries: getLaptopBatteries,
     totalEnergy: totalEnergy,

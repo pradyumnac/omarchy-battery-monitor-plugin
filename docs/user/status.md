@@ -29,6 +29,26 @@ BATTERY STATUS
 `Usual remaining` answers how long the currently stored energy normally lasts.
 `At full` is the same learned workload projected from full usable capacity.
 
+## Read physical-battery state icons
+
+Each physical battery has one state icon in its health row. The glyph shows the
+battery state. The icon colour shows that battery's charge level.
+
+| Condition | Glyph | Colour |
+| --- | --- | --- |
+| State is unknown, missing, or unsupported | Exclamation | Charge-level colour, or white when the percentage is missing |
+| Charging | Lightning | Charge-level colour |
+| Discharging | Down arrow | Charge-level colour |
+| Charge threshold holds the battery | Battery | Orange |
+| Fully charged without a threshold hold | Battery | Green |
+| Empty | Battery | Red |
+| Any other known state | Battery | Charge-level colour |
+
+The colour order is: empty or less than 5% is red; 5% through 19% is yellow;
+a threshold hold is orange; full charge is green; all other levels are white.
+A threshold hold takes priority over full charge. Each battery uses its own
+state, percentage, and threshold status.
+
 ## Follow the lifecycle state
 
 ### While learning
