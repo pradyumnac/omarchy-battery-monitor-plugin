@@ -103,6 +103,27 @@ makes `Usual` responsive to recent usage while retaining a limited longer
 back-reference. Future-dated rows survive bounded retention for diagnosis but
 do not count as evidence.
 
+## Selected estimators
+
+`estimators.tsv` records which estimator each battery projects with:
+
+```text
+# battery-estimators<TAB>v1
+<battery-key><TAB><estimator><TAB><scored><TAB><mean-error-mW><TAB><chosen-epoch>
+```
+
+The tracker rewrites it when it records a window — at most once every 15
+minutes — and every reader looks the answer up. Scoring is far too expensive to
+repeat on a panel refresh, and the answer cannot change without a new window.
+
+`median` is the incumbent and keeps the job unless a challenger beats it by
+`BATTERY_MODEL_ESTIMATOR_MARGIN_PERCENT` on that battery's own held-out
+windows. The margin exists because scores drift window to window: without it
+the selection would flap between estimators separated by noise, and a
+projection that silently changes shape is harder to trust than one that is
+consistently a little worse. Deleting this file costs nothing — every battery
+falls back to `median` and the next recorded window rebuilds it.
+
 ## Guarantees
 
 - Battery identity **is** recorded: each window stores the manufacturer, model

@@ -240,18 +240,26 @@ error by charge bucket, and split again by battery health.
 Do not implement a correction before that split shows one is needed. If the
 error is flat across buckets there is nothing here.
 
-### Continuous backtesting
+### Continuous backtesting — implemented
 
-`make backtest` is a one-shot report today. The intent is for scoring to run
-continuously against each installed battery's accumulating evidence, so the
-estimator in use is the one that currently measures best *for that cell*
-rather than one chosen once and frozen.
+Scoring now runs continuously. The tracker rescores each battery against its
+own accumulating evidence whenever it records a window, and writes the winning
+estimator to `estimators.tsv`; the view projects with whatever that battery
+selected. `make backtest` renders the same scoring for a human and reports the
+selection it would make, so the report and the running model cannot tell
+different stories — both call `battery_model_score_draws()`.
 
-That needs, in rough order: a stable per-battery score that is cheap enough to
-recompute as windows arrive; a record of which estimator is selected per
-battery and why; and a guard against flapping between estimators whose scores
-are within noise of each other. The selection itself must stay auditable — a
-model that silently changes shape is worse than a slightly worse fixed one.
+The three requirements this needed were met as follows. Cost is kept off the
+refresh path by scoring at window-append time, at most once every 15 minutes,
+rather than on every panel read. The choice is recorded per battery with the
+held-out error that earned it, and `make status` prints both. Flapping is
+prevented by `BATTERY_MODEL_ESTIMATOR_MARGIN_PERCENT`: `median` keeps the job
+unless a challenger beats it by a clear margin.
+
+Still open: the margin and `BATTERY_MODEL_ESTIMATOR_MIN_SCORED` are chosen by
+judgement, not measurement. Once real multi-week histories exist, check how
+often the selection changes and whether the margin is doing useful work or
+merely freezing an early accident.
 
 `make export` writes the same history as CSV for exploring these questions in a
 notebook before any of it is committed to shell.

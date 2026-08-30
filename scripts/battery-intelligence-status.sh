@@ -199,7 +199,13 @@ battery_block() {
   esac
 
   if ((draw > 0)); then
-    subfield "Typical draw" "$(format_power "$draw")"
+    local estimator=${view_bat_estimator[index]}
+    local estimator_error=${view_bat_estimator_error[index]}
+    local draw_label="$(format_power "$draw") · $estimator"
+    # A selected estimator earned the job by scoring better on this battery's
+    # own held-out windows; say what it cost so the choice is auditable.
+    ((estimator_error > 0)) && draw_label+=" (±$(format_power "$estimator_error") held-out)"
+    subfield "Typical draw" "$draw_label"
   fi
   # The sampling window measures whichever battery is actually discharging, so
   # its progress is reported against that battery rather than the pack.

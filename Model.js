@@ -54,8 +54,6 @@ function emptyView() {
     fullSeconds: 0,
     remainingLowSeconds: 0,
     remainingHighSeconds: 0,
-    recentDrawMw: 0,
-    recentRemainingSeconds: 0,
     legacyRows: 0,
     absentBatteries: [],
     packKey: "",
@@ -118,8 +116,6 @@ function parseView(raw) {
   view.fullSeconds = viewNumber(model.full_seconds);
   view.remainingLowSeconds = viewNumber(model.remaining_low_seconds);
   view.remainingHighSeconds = viewNumber(model.remaining_high_seconds);
-  view.recentDrawMw = viewNumber(model.recent_draw_mw);
-  view.recentRemainingSeconds = viewNumber(model.recent_remaining_seconds);
 
   var history = parsed.history || {};
   // Evidence recorded on a battery set that is no longer installed. Non-zero
@@ -177,6 +173,8 @@ function parseView(raw) {
         fullSeconds: viewNumber(batteryModel.full_seconds),
         remainingLowSeconds: viewNumber(batteryModel.remaining_low_seconds),
         remainingHighSeconds: viewNumber(batteryModel.remaining_high_seconds),
+        estimator: String(batteryModel.estimator || "median"),
+        estimatorErrorMw: viewNumber(batteryModel.estimator_error_mw),
       },
     };
   }

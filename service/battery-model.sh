@@ -42,6 +42,16 @@ readonly BATTERY_MODEL_MIN_SESSIONS=3
 readonly BATTERY_MODEL_PROVISIONAL_WINDOWS=4
 # How many of the newest windows form the "right now" estimate.
 readonly BATTERY_MODEL_RECENT_WINDOWS=4
+# A challenger estimator replaces the incumbent only when it is at least this
+# much better. Scores drift window to window; without a margin the selection
+# would flap between estimators separated by noise, and a projection that
+# silently changes shape is worse than a slightly worse stable one.
+readonly BATTERY_MODEL_ESTIMATOR_MARGIN_PERCENT=15
+# No estimator is selected on less evidence than this. Below it the median is
+# used, which is the estimator that degrades most gracefully when starved.
+readonly BATTERY_MODEL_ESTIMATOR_MIN_SCORED=8
+readonly BATTERY_MODEL_DEFAULT_ESTIMATOR="median"
+readonly BATTERY_MODEL_ESTIMATOR_HEADER=$'# battery-estimators\tv1'
 # A window whose average draw falls outside this range is rejected as noise
 # (a suspend, a hot-swapped battery, or a sysfs counter that jumped).
 readonly BATTERY_MODEL_MIN_DRAW_MW=100
@@ -88,6 +98,7 @@ battery_model_window_count=0
 battery_model_session_count=0
 battery_model_latest_epoch=0
 battery_model_draws=()               # selected battery's draws, ascending
+battery_model_draws_ordered=()       # the same draws, oldest first
 battery_model_recent_draws=()        # newest BATTERY_MODEL_RECENT_WINDOWS
 
 battery_model_history_valid() {
@@ -216,12 +227,14 @@ battery_model_select_battery() {
   battery_model_session_count=0
   battery_model_latest_epoch=0
   battery_model_draws=()
+  battery_model_draws_ordered=()
   battery_model_recent_draws=()
   [[ -n $key ]] || return 0
   [[ -n ${battery_model_key_draws[$key]+x} ]] || return 0
 
   for draw in ${battery_model_key_draws[$key]}; do
     battery_model_draws+=("$draw")
+    battery_model_draws_ordered+=("$draw")
     battery_model_window_count=$((battery_model_window_count + 1))
   done
   for session in ${battery_model_key_sessions[$key]}; do
@@ -286,6 +299,194 @@ battery_model_mean() {
   }
   for value in "${_bm_values[@]}"; do total=$((total + value)); done
   printf '%s' "$(((total + count / 2) / count))"
+}
+
+# --- Estimator scoring -----------------------------------------------------
+#
+# The one implementation of held-out scoring. `make backtest` renders it for a
+# human; the tracker uses it to choose the estimator each battery projects
+# with. A second copy would be free to disagree with the first, which is the
+# failure this whole seam exists to prevent.
+#
+# Reads draws on stdin, oldest first, one per line. At each window it predicts
+# using only the windows before it, never the window itself. Prints one row per
+# estimator: NAME, scored count, mean absolute error, median absolute error,
+# and bias (signed, so a consistently high or low estimator is visible).
+battery_model_score_draws() {
+  local warmup=${1:-$BATTERY_MODEL_PROVISIONAL_WINDOWS}
+  awk -v warmup="$warmup" -v recent_windows="$BATTERY_MODEL_RECENT_WINDOWS" '
+    function median(count,   sorted, i, j, key, middle) {
+      for (i = 1; i <= count; i++) sorted[i] = window[i]
+      for (i = 2; i <= count; i++) {
+        key = sorted[i]
+        for (j = i - 1; j >= 1 && sorted[j] > key; j--) sorted[j + 1] = sorted[j]
+        sorted[j + 1] = key
+      }
+      middle = int(count / 2)
+      if (count % 2 == 1) return sorted[middle + 1]
+      return int((sorted[middle] + sorted[middle + 1]) / 2)
+    }
+    function mean_of_last(count, howmany,   i, total, taken) {
+      total = 0; taken = 0
+      for (i = count; i >= 1 && taken < howmany; i--) { total += window[i]; taken++ }
+      if (taken == 0) return 0
+      return int(total / taken + 0.5)
+    }
+    function score(name, predicted, actual,   error) {
+      if (predicted <= 0) return
+      error = predicted - actual
+      bias[name] += error
+      if (error < 0) error = -error
+      total[name] += error
+      scored[name]++
+      errors[name "\t" scored[name]] = error
+    }
+    function percentile_error(name, p,   i, count, list, j, key, rank) {
+      count = scored[name]
+      if (count == 0) return 0
+      for (i = 1; i <= count; i++) list[i] = errors[name "\t" i]
+      for (i = 2; i <= count; i++) {
+        key = list[i]
+        for (j = i - 1; j >= 1 && list[j] > key; j--) list[j + 1] = list[j]
+        list[j + 1] = key
+      }
+      rank = int((p * count + 99) / 100)
+      if (rank < 1) rank = 1
+      if (rank > count) rank = count
+      return list[rank]
+    }
+    $1 ~ /^[1-9][0-9]*$/ {
+      actual = $1 + 0
+      if (held >= warmup) {
+        score("median", median(held), actual)
+        score("recent", mean_of_last(held, recent_windows), actual)
+        score("last", window[held], actual)
+        if (ewma > 0) score("ewma", int(ewma + 0.5), actual)
+      }
+      window[++held] = actual
+      if (ewma == 0) ewma = actual
+      else ewma = 0.3 * actual + 0.7 * ewma
+    }
+    END {
+      split("median recent ewma last", names, " ")
+      for (n = 1; n <= 4; n++) {
+        name = names[n]
+        if (scored[name] == 0) continue
+        printf "%s\t%d\t%d\t%d\t%d\n", name, scored[name],
+          int(total[name] / scored[name] + 0.5),
+          percentile_error(name, 50),
+          int(bias[name] / scored[name] + 0.5)
+      }
+    }
+  '
+}
+
+# Choose the estimator a battery should project with, from its own ordered
+# draws on stdin. Prints: NAME<TAB>SCORED<TAB>MEAN_ERROR.
+#
+# The median is the incumbent and keeps the job unless a challenger beats it by
+# BATTERY_MODEL_ESTIMATOR_MARGIN_PERCENT. Selection is deliberately sticky: an
+# estimate that changes shape between refreshes is harder to trust than one
+# that is consistently a little worse.
+battery_model_best_estimator() {
+  local name scored mean p50 bias
+  local best=$BATTERY_MODEL_DEFAULT_ESTIMATOR best_scored=0 best_mean=0 row
+  local median_mean=0 median_scored=0
+  local -a rows=()
+
+  while IFS=$'\t' read -r name scored mean p50 bias; do
+    [[ -n $name ]] || continue
+    rows+=("$name"$'\t'"$scored"$'\t'"$mean")
+    if [[ $name == median ]]; then
+      median_mean=$mean
+      median_scored=$scored
+    fi
+  done < <(battery_model_score_draws)
+
+  best_scored=$median_scored
+  best_mean=$median_mean
+  if ((median_scored >= BATTERY_MODEL_ESTIMATOR_MIN_SCORED && median_mean > 0)); then
+    for row in "${rows[@]}"; do
+      IFS=$'\t' read -r name scored mean <<<"$row"
+      [[ $name != median ]] || continue
+      ((scored >= BATTERY_MODEL_ESTIMATOR_MIN_SCORED)) || continue
+      ((mean > 0)) || continue
+      # Strictly better by the margin, measured against the incumbent.
+      if ((mean * 100 <= median_mean * (100 - BATTERY_MODEL_ESTIMATOR_MARGIN_PERCENT))); then
+        if [[ $best == "$BATTERY_MODEL_DEFAULT_ESTIMATOR" ]] || ((mean < best_mean)); then
+          best=$name
+          best_mean=$mean
+          best_scored=$scored
+        fi
+      fi
+    done
+  fi
+  printf '%s\t%s\t%s' "$best" "$best_scored" "$best_mean"
+}
+
+# The draw an estimator would project with, for the currently selected battery.
+battery_model_estimator_draw() {
+  local estimator=$1 count=${#battery_model_draws_ordered[@]} index total=0 taken=0 ewma=0
+  ((count > 0)) || {
+    printf '0'
+    return 0
+  }
+  case $estimator in
+  recent)
+    battery_model_mean battery_model_recent_draws
+    ;;
+  last)
+    printf '%s' "${battery_model_draws_ordered[count - 1]}"
+    ;;
+  ewma)
+    for ((index = 0; index < count; index++)); do
+      if ((index == 0)); then
+        ewma=$((battery_model_draws_ordered[index] * 1000))
+      else
+        ewma=$(((3 * battery_model_draws_ordered[index] * 1000 + 7 * ewma) / 10))
+      fi
+    done
+    printf '%s' "$(((ewma + 500) / 1000))"
+    ;;
+  *)
+    battery_model_median battery_model_draws
+    ;;
+  esac
+}
+
+# --- Selected estimators ---------------------------------------------------
+#
+# Scoring is far too expensive to repeat on every panel refresh, and the answer
+# changes at most once per completed window. The tracker scores each battery
+# when it records a window and writes the choice here; every reader just looks
+# it up. That keeps the cost on the 15-minute path instead of the 5-second one.
+
+declare -A battery_model_estimator=()
+declare -A battery_model_estimator_error=()
+declare -A battery_model_estimator_scored=()
+
+battery_model_load_estimators() {
+  local store=$1 first_line key estimator scored mean chosen
+  battery_model_estimator=()
+  battery_model_estimator_error=()
+  battery_model_estimator_scored=()
+  [[ -f "$store" ]] || return 0
+  IFS= read -r first_line <"$store" 2>/dev/null || return 0
+  [[ $first_line == "$BATTERY_MODEL_ESTIMATOR_HEADER" ]] || return 0
+  while IFS=$'\t' read -r key estimator scored mean chosen; do
+    [[ -n $key && -n $estimator ]] || continue
+    [[ $key == \#* ]] && continue
+    battery_model_estimator["$key"]=$estimator
+    battery_model_estimator_scored["$key"]=${scored:-0}
+    battery_model_estimator_error["$key"]=${mean:-0}
+  done <"$store"
+}
+
+# The estimator a battery projects with: its own selection, or the default when
+# it has never been scored.
+battery_model_estimator_for() {
+  local key=$1
+  printf '%s' "${battery_model_estimator[$key]:-$BATTERY_MODEL_DEFAULT_ESTIMATOR}"
 }
 
 # --- Gate ------------------------------------------------------------------

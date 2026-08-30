@@ -65,9 +65,6 @@ view_remaining_seconds=0
 view_full_seconds=0
 view_remaining_low_seconds=0
 view_remaining_high_seconds=0
-view_recent_draw_mw=0
-view_recent_remaining_seconds=0
-view_recent_window_count=0
 view_model_updated_epoch=0
 view_history_state="missing"
 view_history_total=0
@@ -109,6 +106,8 @@ view_bat_remaining_seconds=()
 view_bat_full_seconds=()
 view_bat_remaining_low_seconds=()
 view_bat_remaining_high_seconds=()
+view_bat_estimator=()          # the estimator this battery projects with
+view_bat_estimator_error=()    # its held-out mean error, mW
 
 # --- Helpers ---------------------------------------------------------------
 
@@ -321,11 +320,15 @@ battery_view_collect_batteries() {
 # together — while one supplies the system the other sits idle.
 battery_view_collect_model() {
   local history_file=$1
-  local index key confidence draw p25 p75 energy_now energy_full
+  local index key confidence draw p25 p75 energy_now energy_full estimator
   local ready_count=0 modelled=0 present_count=${#view_bat_name[@]}
   local absent
 
   battery_model_load_history "$history_file" "$view_generated_epoch"
+  # Which estimator each battery projects with was decided by the tracker when
+  # it last recorded a window. Reading the answer keeps the scoring cost off
+  # the panel refresh path.
+  battery_model_load_estimators "${history_file%/*}/estimators.tsv"
   view_history_state=$battery_model_state
   view_history_total=$battery_model_total_rows
   view_history_future=$battery_model_future_rows
@@ -344,9 +347,12 @@ battery_view_collect_model() {
     view_history_recent=$((view_history_recent + battery_model_window_count))
 
     confidence=$(battery_model_confidence)
+    estimator=$(battery_model_estimator_for "$key")
+    view_bat_estimator+=("$estimator")
+    view_bat_estimator_error+=("${battery_model_estimator_error[$key]:-0}")
     draw=0
     if [[ $confidence == ready || $confidence == provisional ]]; then
-      draw=$(battery_model_median battery_model_draws)
+      draw=$(battery_model_estimator_draw "$estimator")
     fi
     if ((draw <= 0)); then
       view_bat_model_state+=("$confidence")
@@ -478,7 +484,7 @@ battery_view_json_bool() {
 
 battery_view_json_batteries() {
   local -n _bv_bat_out=$1
-  local index separator="" name status cycles model vendor held key state
+  local index separator="" name status cycles model vendor held key state estimator
   _bv_bat_out=""
   for ((index = 0; index < ${#view_bat_name[@]}; index++)); do
     battery_view_json_string name "${view_bat_name[index]}"
@@ -489,7 +495,8 @@ battery_view_json_batteries() {
     battery_view_json_bool held "${view_bat_held[index]}"
     battery_view_json_string key "${view_bat_key[index]}"
     battery_view_json_string state "${view_bat_model_state[index]}"
-    printf -v _bv_bat_out '%s%s\n    {"name": %s, "status": %s, "percent": %s, "energy_now_uwh": %s, "energy_full_uwh": %s, "energy_full_design_uwh": %s, "power_now_uw": %s, "cycle_count": %s, "model": %s, "vendor": %s, "end_threshold_percent": %s, "held": %s, "key": %s, "model": {"state": %s, "windows": %s, "sessions": %s, "typical_draw_mw": %s, "remaining_seconds": %s, "full_seconds": %s, "remaining_low_seconds": %s, "remaining_high_seconds": %s}}' \
+    battery_view_json_string estimator "${view_bat_estimator[index]}"
+    printf -v _bv_bat_out '%s%s\n    {"name": %s, "status": %s, "percent": %s, "energy_now_uwh": %s, "energy_full_uwh": %s, "energy_full_design_uwh": %s, "power_now_uw": %s, "cycle_count": %s, "model": %s, "vendor": %s, "end_threshold_percent": %s, "held": %s, "key": %s, "model": {"state": %s, "estimator": %s, "estimator_error_mw": %s, "windows": %s, "sessions": %s, "typical_draw_mw": %s, "remaining_seconds": %s, "full_seconds": %s, "remaining_low_seconds": %s, "remaining_high_seconds": %s}}' \
       "$_bv_bat_out" "$separator" "$name" "$status" \
       "${view_bat_percent[index]}" \
       "${view_bat_energy_now_uwh[index]}" \
@@ -497,7 +504,8 @@ battery_view_json_batteries() {
       "${view_bat_energy_design_uwh[index]}" \
       "${view_bat_power_now_uw[index]}" \
       "$cycles" "$model" "$vendor" \
-      "${view_bat_end_threshold[index]}" "$held" "$key" "$state" \
+      "${view_bat_end_threshold[index]}" "$held" "$key" "$state" "$estimator" \
+      "${view_bat_estimator_error[index]}" \
       "${view_bat_windows[index]}" "${view_bat_sessions[index]}" \
       "${view_bat_typical_draw_mw[index]}" \
       "${view_bat_remaining_seconds[index]}" "${view_bat_full_seconds[index]}" \
@@ -572,13 +580,14 @@ battery_view_emit_json() {
     "$view_energy_now_uwh" "$view_energy_capacity_uwh" "$view_energy_design_uwh" \
     "$view_charge_percent" "$view_draw_mw" "$view_charge_limit_percent" \
     "$view_live_time_seconds"
-  printf '  "model": {"state": %s, "windows": %s, "sessions": %s, "required_windows": %s, "required_sessions": %s, "typical_draw_mw": %s, "remaining_seconds": %s, "full_seconds": %s, "remaining_low_seconds": %s, "remaining_high_seconds": %s, "recent_draw_mw": %s, "recent_remaining_seconds": %s, "recent_windows": %s, "updated_epoch": %s},\n' \
+  # The pack summary. Estimator selection and recency are per battery and live
+  # in each battery's own object; the pack carries only the totals.
+  printf '  "model": {"state": %s, "windows": %s, "sessions": %s, "required_windows": %s, "required_sessions": %s, "typical_draw_mw": %s, "remaining_seconds": %s, "full_seconds": %s, "remaining_low_seconds": %s, "remaining_high_seconds": %s, "updated_epoch": %s},\n' \
     "$model_state" "$view_model_windows" "$view_model_sessions" \
     "$BATTERY_MODEL_MIN_WINDOWS" "$BATTERY_MODEL_MIN_SESSIONS" \
     "$view_typical_draw_mw" "$view_remaining_seconds" "$view_full_seconds" \
     "$view_remaining_low_seconds" "$view_remaining_high_seconds" \
-    "$view_recent_draw_mw" "$view_recent_remaining_seconds" \
-    "$view_recent_window_count" "$view_model_updated_epoch"
+    "$view_model_updated_epoch"
   printf '  "history": {"state": %s, "total": %s, "recent": %s, "archived": %s, "future": %s, "legacy": %s},\n' \
     "$history_state" "$view_history_total" "$view_history_recent" \
     "$view_history_archived" "$view_history_future" "$view_history_legacy"

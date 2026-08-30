@@ -600,9 +600,40 @@ else
   window_reset_reason=""
 fi
 
+# Rescore each battery against its own accumulated evidence and record which
+# estimator currently measures best for it. This is the expensive path, so it
+# runs only when a window was actually recorded — at most once every 15 minutes
+# — and never on the poll that merely advances an open window.
+update_estimators() {
+  local history_file="$state_dir/discharge-history.tsv"
+  local store="$state_dir/estimators.tsv"
+  local tmp key selection estimator scored mean
+
+  battery_model_load_history "$history_file" "$now"
+  ((${#battery_model_keys[@]} > 0)) || return 0
+  umask 077
+  tmp="$store.tmp.$$"
+  {
+    printf '%s\n' "$BATTERY_MODEL_ESTIMATOR_HEADER"
+    for key in "${battery_model_keys[@]}"; do
+      battery_model_select_battery "$key"
+      ((${#battery_model_draws_ordered[@]} > 0)) || continue
+      selection=$(printf '%s\n' "${battery_model_draws_ordered[@]}" |
+        battery_model_best_estimator)
+      IFS=$'\t' read -r estimator scored mean <<<"$selection"
+      printf '%s\t%s\t%s\t%s\t%s\n' \
+        "$key" "$estimator" "${scored:-0}" "${mean:-0}" "$now"
+    done
+  } >"$tmp"
+  mv -f -- "$tmp" "$store"
+}
+
 # Nothing can have aged out of a file that did not just grow, and on AC there
 # is no window at all — so the poll ends here in the common case.
-((history_appended == 1)) && prune_history
+if ((history_appended == 1)); then
+  prune_history
+  update_estimators
+fi
 
 # An event is authoritative even if the fallback timer observed the state first.
 if ((power_event == 1)) && [[ $current_state == "on-charge" && $charge_session_valid != 1 ]]; then
