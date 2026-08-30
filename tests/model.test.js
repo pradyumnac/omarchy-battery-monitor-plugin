@@ -135,6 +135,10 @@ test("state icon severity ranks charge level above threshold and full", () => {
     "critical",
   );
   assert.equal(
+    severity({ isPresent: true, percentage: 0.07, state: states.Discharging }),
+    "critical",
+  );
+  assert.equal(
     severity({ isPresent: true, percentage: 0.1, state: states.Discharging }),
     "low",
   );

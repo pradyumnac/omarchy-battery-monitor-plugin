@@ -51,7 +51,7 @@ battery state. The icon colour shows that battery's charge level.
 | Empty | Battery | Red |
 | Any other known state | Battery | Charge-level colour |
 
-The colour order is: empty or less than 5% is red; 5% through 19% is yellow;
+The colour order is: empty or less than 10% is red; 10% through 19% is yellow;
 a threshold hold is orange; full charge is green; all other levels use the
 theme foreground colour. Red and the foreground colour follow the active
 Omarchy theme. A threshold hold takes priority over full charge. Each battery

@@ -135,7 +135,7 @@ function sysfsThresholdActive(extra) {
 function deviceStateSeverity(device, extra, states) {
   var fraction = batteryFraction(device);
   var s = states || {};
-  if ((device && device.state === s.Empty) || fraction < 0.05) return "critical";
+  if ((device && device.state === s.Empty) || fraction < 0.1) return "critical";
   if (fraction < 0.2) return "low";
   if (sysfsThresholdActive(extra)) return "held";
   if (device && device.state === s.FullyCharged) return "full";
