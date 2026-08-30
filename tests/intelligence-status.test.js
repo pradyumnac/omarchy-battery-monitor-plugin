@@ -1,9 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { withFixture: withDir } = require("./support/fixture");
 
 const statusScript = path.join(
   __dirname,
@@ -13,16 +13,6 @@ const statusScript = path.join(
 );
 const repository = path.join(__dirname, "..");
 const ansi = String.fromCharCode(27);
-const testRoot = path.join(
-  os.homedir(),
-  ".cache",
-  "omarchy-battery-monitor-plugin-tests",
-);
-fs.mkdirSync(testRoot, { recursive: true });
-
-function fixture(name) {
-  return fs.mkdtempSync(path.join(testRoot, `${name}-`));
-}
 
 function writeState(stateDir, fields = {}) {
   const defaults = {
@@ -121,12 +111,7 @@ function runStatus(stateDir, extraEnv = {}) {
 }
 
 function withFixture(name, callback) {
-  const stateDir = fixture(name);
-  try {
-    callback(stateDir);
-  } finally {
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
+  return withDir({ stateDir: name }, (f) => callback(f.stateDir));
 }
 
 test("reports a ready discharging model", () => {
@@ -420,21 +405,21 @@ test("uses ANSI colors only when requested", () => {
 });
 
 test("make status renders only the concise human-facing report", () => {
-  const root = fixture("combined-status");
-  const stateDir = path.join(root, "battery-session");
-  const bin = path.join(root, "bin");
-  fs.mkdirSync(stateDir);
-  fs.mkdirSync(bin);
-  writeState(stateDir, {
-    battery_energy_now_uwh: 0,
-    battery_usable_capacity_uwh: 0,
-    usual_remaining_runtime_seconds: 0,
-    usual_full_runtime_seconds: 0,
-  });
-  fs.writeFileSync(path.join(bin, "systemctl"), "#!/bin/sh\nexit 0\n", {
-    mode: 0o700,
-  });
-  try {
+  withDir({ root: "combined-status" }, (f) => {
+    const root = f.root;
+    const stateDir = path.join(root, "battery-session");
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(stateDir);
+    fs.mkdirSync(bin);
+    writeState(stateDir, {
+      battery_energy_now_uwh: 0,
+      battery_usable_capacity_uwh: 0,
+      usual_remaining_runtime_seconds: 0,
+      usual_full_runtime_seconds: 0,
+    });
+    fs.writeFileSync(path.join(bin, "systemctl"), "#!/bin/sh\nexit 0\n", {
+      mode: 0o700,
+    });
     const statusEnv = {
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
@@ -459,9 +444,7 @@ test("make status renders only the concise human-facing report", () => {
     assert.equal(result.stdout.includes("previous_state"), false);
     assert.equal(result.stdout.includes("State file:"), false);
     assert.match(verbose.stdout, /State file:/);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  });
 });
 
 test("reports waiting state before any observations", () => {

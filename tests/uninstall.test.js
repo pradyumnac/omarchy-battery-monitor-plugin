@@ -1,9 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { withFixture, executable } = require("./support/fixture");
 
 const uninstaller = path.join(
   __dirname,
@@ -11,43 +11,34 @@ const uninstaller = path.join(
   "scripts",
   "uninstall-session-tracker.sh",
 );
-const testRoot = path.join(
-  os.homedir(),
-  ".cache",
-  "omarchy-battery-monitor-plugin-tests",
-);
-fs.mkdirSync(testRoot, { recursive: true });
 
-function executable(file, content) {
-  fs.writeFileSync(file, content, { mode: 0o700 });
-}
+function withUninstallFixture(callback) {
+  return withFixture({ root: "uninstall" }, (f) => {
+    const plugin = path.join(f.root, "plugin");
+    const config = path.join(f.root, "config");
+    const units = path.join(config, "systemd", "user");
+    const state = path.join(f.root, "state");
+    const bin = path.join(f.root, "bin");
+    fs.mkdirSync(path.join(plugin, "scripts"), { recursive: true });
+    fs.mkdirSync(path.join(plugin, "service"), { recursive: true });
+    fs.mkdirSync(units, { recursive: true });
+    fs.mkdirSync(state, { recursive: true });
+    fs.mkdirSync(bin, { recursive: true });
 
-function fixture() {
-  const root = fs.mkdtempSync(path.join(testRoot, "uninstall-"));
-  const plugin = path.join(root, "plugin");
-  const config = path.join(root, "config");
-  const units = path.join(config, "systemd", "user");
-  const state = path.join(root, "state");
-  const bin = path.join(root, "bin");
-  fs.mkdirSync(path.join(plugin, "scripts"), { recursive: true });
-  fs.mkdirSync(path.join(plugin, "service"), { recursive: true });
-  fs.mkdirSync(units, { recursive: true });
-  fs.mkdirSync(state, { recursive: true });
-  fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(plugin, "manifest.json"), "{}\n");
+    fs.writeFileSync(path.join(units, "battery-session-tracker.service"), "");
+    fs.writeFileSync(path.join(state, "state"), "previous_state=on-battery\n");
+    fs.writeFileSync(
+      path.join(state, "discharge-history.tsv"),
+      "# battery-discharge-history\tv1\n",
+    );
+    fs.mkdirSync(path.join(state, "metrics"));
+    fs.writeFileSync(path.join(state, "metrics", "future-data"), "retained\n");
+    executable(path.join(bin, "systemctl"), "#!/usr/bin/env bash\nexit 0\n");
+    executable(path.join(bin, "omarchy-shell"), "#!/usr/bin/env bash\nexit 0\n");
 
-  fs.writeFileSync(path.join(plugin, "manifest.json"), "{}\n");
-  fs.writeFileSync(path.join(units, "battery-session-tracker.service"), "");
-  fs.writeFileSync(path.join(state, "state"), "previous_state=on-battery\n");
-  fs.writeFileSync(
-    path.join(state, "discharge-history.tsv"),
-    "# battery-discharge-history\tv1\n",
-  );
-  fs.mkdirSync(path.join(state, "metrics"));
-  fs.writeFileSync(path.join(state, "metrics", "future-data"), "retained\n");
-  executable(path.join(bin, "systemctl"), "#!/usr/bin/env bash\nexit 0\n");
-  executable(path.join(bin, "omarchy-shell"), "#!/usr/bin/env bash\nexit 0\n");
-
-  return { root, plugin, config, state, bin };
+    return callback({ ...f, plugin, config, state, bin });
+  });
 }
 
 function runUninstaller(f, args = []) {
@@ -64,8 +55,7 @@ function runUninstaller(f, args = []) {
 }
 
 test("uninstall --keep-data retains all collected data", () => {
-  const f = fixture();
-  try {
+  withUninstallFixture((f) => {
     const result = runUninstaller(f, ["--keep-data"]);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(fs.existsSync(f.plugin), false);
@@ -79,22 +69,17 @@ test("uninstall --keep-data retains all collected data", () => {
       "retained\n",
     );
     assert.match(result.stdout, /data retained at/);
-  } finally {
-    fs.rmSync(f.root, { recursive: true, force: true });
-  }
+  });
 });
 
 test("uninstall without --keep-data purges all collected data", () => {
-  const f = fixture();
-  try {
+  withUninstallFixture((f) => {
     const result = runUninstaller(f);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(fs.existsSync(f.plugin), false);
     assert.equal(fs.existsSync(f.state), false);
     assert.match(result.stdout, /session and intelligence data removed/);
-  } finally {
-    fs.rmSync(f.root, { recursive: true, force: true });
-  }
+  });
 });
 
 test("make lifecycle targets restart the shell", () => {
@@ -124,14 +109,11 @@ test("make lifecycle targets restart the shell", () => {
 });
 
 test("uninstall rejects unknown options before removing anything", () => {
-  const f = fixture();
-  try {
+  withUninstallFixture((f) => {
     const result = runUninstaller(f, ["--unknown"]);
     assert.equal(result.status, 2);
     assert.match(result.stderr, /Usage: .* \[--keep-data\]/);
     assert.equal(fs.existsSync(path.join(f.plugin, "manifest.json")), true);
     assert.equal(fs.existsSync(path.join(f.state, "state")), true);
-  } finally {
-    fs.rmSync(f.root, { recursive: true, force: true });
-  }
+  });
 });

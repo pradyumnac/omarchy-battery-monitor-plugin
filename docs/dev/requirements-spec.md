@@ -23,10 +23,10 @@ This doc is the single source of pending work. GitHub issues are archived
 | Charge-threshold detection | `tests/model.test.js` |
 | UPower event triggers a notification | `tests/monitor.test.js` |
 | Held-threshold battery still gets `Plugged` after the wait times out | `tests/monitor.test.js` |
-| Poll alone never sends a notification | `tests/tracker.test.js`, `tests/monitor.test.js` |
+| Poll alone never sends a notification | `tests/tracker.test.js` |
 | `Plugged` notification content | `tests/tracker.test.js` |
 | `Unplugged` notification content | `tests/tracker.test.js` |
-| Duplicate notifications on repeated events | `tests/monitor.test.js` |
+| Duplicate notifications on repeated events | `tests/tracker.test.js` |
 | Notification delivery failure doesn't block state persistence | `tests/tracker.test.js` |
 | Unknown session start falls back to current facts only | `tests/tracker.test.js` |
 | Battery removed mid-session reports `removed` on unplug | `tests/tracker.test.js` |

@@ -158,3 +158,71 @@ test("state icon severity ranks charge level above threshold and full", () => {
     "normal",
   );
 });
+
+test("maps charge fraction to icon glyph and mode label", () => {
+  const states = {
+    Charging: 1,
+    Discharging: 2,
+    FullyCharged: 3,
+    PendingCharge: 4,
+  };
+  assert.equal(Model.batteryFraction({ isPresent: true, percentage: 1.4 }), 1);
+  assert.equal(Model.batteryFraction({ isPresent: false, percentage: 0.5 }), 0);
+  // changeRate avoids the charge-threshold-hold branch so these hit the
+  // charging/discharging icon selection instead.
+  assert.equal(
+    Model.batteryIcon(
+      { isPresent: true, state: states.Charging, changeRate: 5 },
+      0,
+      false,
+      states,
+    ),
+    "󰢜",
+  );
+  assert.equal(
+    Model.batteryIcon(
+      { isPresent: true, state: states.Discharging },
+      0.95,
+      true,
+      states,
+    ),
+    "󰁹",
+  );
+  assert.equal(
+    Model.deviceStateString({ isPresent: true, state: states.Charging }, states),
+    "Charging",
+  );
+  assert.equal(Model.deviceStateString({ isPresent: false }, states), "Not present");
+  assert.equal(
+    Model.deviceStateIcon({ isPresent: true, state: states.Charging }, states),
+    "ϟ",
+  );
+  assert.equal(Model.deviceStateIcon({ isPresent: false }, states), "󰀦");
+  assert.equal(
+    Model.deviceBatteryIcon(
+      { isPresent: true, state: states.FullyCharged, percentage: 1 },
+      states,
+    ),
+    "󰂅",
+  );
+  assert.equal(
+    Model.modeLabel(
+      { isPresent: true, state: states.Charging, changeRate: 5 },
+      0.5,
+      false,
+      states,
+    ),
+    "Charging",
+  );
+});
+
+test("formats elapsed time across minute, hour, and day boundaries", () => {
+  assert.equal(Model.formatElapsed(90), "1m");
+  assert.equal(Model.formatElapsed(3661), "1h 1m");
+  assert.equal(Model.formatElapsed(90000), "1d 1h 0m");
+  assert.equal(Model.formatDuration(1.5), "1h 30m");
+  assert.equal(Model.formatDuration(0), "");
+  assert.equal(Model.formatTimestamp(0), "—");
+  assert.equal(Model.parseUptime("12345.67 890.12"), 12345.67);
+  assert.equal(Model.parseUptime("not-a-number"), 0);
+});
