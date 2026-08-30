@@ -4,20 +4,28 @@
 
 The bar shows one combined percentage. Open the panel for per-battery
 health, energy, cycles, and state. A notification fires only when the
-charger connects or disconnects — the panel's own numbers refresh every 30
-seconds on their own, so a shown duration can lag the real state by up to
-30 seconds. Notifications never lag.
+charger connects or disconnects.
+
+The panel's live battery numbers come from UPower over D-Bus and are pushed as
+they change, so they do not lag. Session durations come from the tracker, which
+polls every few minutes, so a shown duration can lag by that much.
+Notifications never lag.
 
 ## `≈ Usual` runtime
 
-`≈ Usual` projects how long the energy stored **right now** normally lasts,
-using the median draw learned from recent valid discharge windows. It decreases
-with charge level. It is intentionally different from `Left`, which reacts to
-the current workload and can move quickly.
+`≈ Usual` projects how long the energy stored **right now** normally lasts. It
+decreases with charge level. It is intentionally different from `Left`, which
+reacts to the current workload and can move quickly.
 
-The panel shows `≈ Usual` only after 12 valid windows across 3 discharge
-sessions. Use [check battery and model health](status.md) to see learning,
-blocked, stale, charging, full, and charge-threshold states.
+Each battery is modelled from its own discharge windows — a worn cell and a
+healthy one are never averaged together — and `≈ Usual` is the sum of those
+per-battery projections. These batteries discharge one after another rather
+than together, so adding them is what the pack actually gives you.
+
+The panel shows a single combined figure on purpose. To see what each battery
+contributes, and which one is still learning, run `make status`; see
+[check battery and model health](status.md) for learning, blocked, stale,
+charging, full, and charge-threshold states.
 
 ## Charger connected: `Plugged`
 
@@ -45,6 +53,18 @@ The same condition is also called out in the connection notification:
 Plugged
 ⚠ Charge threshold:
 BAT0 · 95%
+```
+
+A battery only appears under `⚠ Charge threshold` once it has actually reached
+its own configured limit. On a machine that charges its batteries in sequence,
+the one waiting its turn reports the same "not charging" state as a battery
+genuinely held at its cap, so it is listed plainly instead:
+
+```text
+Plugged
+BAT1 · 42%
+Not charging:
+BAT0 · 70%
 ```
 
 The notification never repeats numbers the panel already shows — no
@@ -96,8 +116,9 @@ already underway when tracking became reliable:
 | `> 5m` | **At least five minutes**; the actual session started earlier, but its transition time is unknown |
 
 The `>` form appears when the tracker first starts while already plugged or
-unplugged, resumes the same state after a polling gap over 90 seconds or a
-clock reversal, or recovers an older state file with no session timestamp. It
+unplugged, resumes the same state after a polling gap beyond the tracker's
+tolerance or a clock reversal, or recovers an older state file with no session
+timestamp. It
 disappears after the next real plug or unplug transition.
 
 For the mechanics behind this — the state machine, timing, and state file —

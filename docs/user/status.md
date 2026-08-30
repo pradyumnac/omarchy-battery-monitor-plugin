@@ -17,28 +17,73 @@ A healthy discharging system looks like:
 BATTERY STATUS
 ────────────────────────────────────────
   Services: healthy
-  BAT0: health 91% · 24.0 Wh · Discharging · draw 6.1 W
-  BAT1: health 88% · 13.2 Wh
+  BAT0: LGC 01AV420 · SN 1020
+      Battery          72% · 8.7 Wh / 12.1 Wh · health 50% · Discharging · draw 6.1 W
+      Model            ready · 18 windows / 3 sessions
+      Typical draw     6.4 W
+      From this level  1h 25m
+      At full          1h 58m
+      Range            1h 12m – 1h 41m · p25–p75
+      Current sample   40% · 6m of 15m
+  BAT1: SMP 01AV425 · SN 783
+      Battery          88% · 22.9 Wh / 26.0 Wh · health 52% · Not charging
+      Model            ready · 21 windows / 4 sessions
+      Typical draw     6.2 W
+      From this level  3h 41m
+      At full          4h 11m
   Power: on battery · 1h 2m
-  Energy: 10.1 Wh / 37.2 Wh · 27%
-  Model: ready · 18 windows / 3 sessions · learned 4m ago
-  Usual remaining: 1h 35m
-  At full: 5h 48m
-  Typical draw: 6.4 W
+  Energy: 31.6 Wh / 38.1 Wh · 82%
+  Pack model: ready · learned 4m ago
+  Pack remaining: 5h 6m
+  At full: 6h 9m
   Updated: 8s ago
 ```
 
-`Usual remaining` answers how long the currently stored energy normally lasts.
-`At full` is the same learned workload projected from full usable capacity.
+The report prints one **block per battery**, opening with that cell's identity:
+vendor, model, and serial. Everything under it belongs to that battery alone.
 
-The report prints one line for each present battery. The line gives the health
-against the design capacity, the full-charge energy, and the live power flow
-while current moves. The line name is the sysfs directory name, so a laptop
-with other battery names shows those names.
+- `Battery` is its current charge and energy, its health against design
+  capacity, its sysfs status, and the live power flow while current moves.
+- `Model` is how much of its *own* evidence it has gathered.
+- `From this level` answers how long that battery normally lasts from where it
+  is now; `At full` projects the same workload from its full charge.
+- `Current sample` appears only on the battery actually discharging, because
+  that is the one being measured.
+
+`Pack remaining` below is the sum of the per-battery figures. These batteries
+discharge one after another rather than together, so adding them is what the
+pack actually gives you.
+
+The block name is the sysfs directory name, so a laptop with other battery
+names shows those names.
+
+## Why each battery is modelled separately
+
+A cell's runtime depends on its own capacity, age, and discharge curve. Mixing
+a worn battery's measurements with a healthy one produces a number describing
+neither. So every window of evidence is anchored to the battery that recorded
+it — by vendor, model, and serial, not by capacity, which drifts with wear.
+
+Two consequences worth knowing:
+
+- **Swapping a battery does not corrupt the model.** The new cell starts
+  gathering its own evidence; the old cell's windows stay on file and are named
+  under `Not installed`, but never feed a projection.
+- **A rarely used battery learns slowly.** On a machine that discharges its
+  cells in sequence, the second battery only gathers evidence once the first is
+  empty, so it can sit at `learning` for a long time. That is expected.
+
+## Understand `Typical draw`
+
+The estimator named beside the draw is the one currently measuring best for
+that battery, chosen by scoring candidates against its own held-out windows.
+When no candidate clearly beats the default, none is named. Run `make backtest`
+to see the scores behind the choice.
 
 ## Read physical-battery state icons
 
-Each physical battery has one state icon in its health row. The glyph shows the
+These icons are drawn in the **panel**, not in `make status`. Each physical
+battery has one state icon in its card. The glyph shows the
 battery state. The icon colour shows that battery's charge level.
 
 | Condition | Glyph | Colour |
@@ -59,22 +104,24 @@ uses its own state, percentage, and threshold status.
 
 ## Follow the lifecycle state
 
+Each battery reaches these states on its own evidence, so the two blocks can
+sit at different states at the same time.
+
 ### While learning
 
 ```text
-Model: learning · 3/12 windows · 1/3 sessions
-Current sample: 8m of 15m
+      Model            learning · 3/12 windows · 1/3 sessions
+      Current sample   53% · 8m of 15m
 ```
 
 Leave the tracker running across ordinary battery use. Charging, suspend gaps,
-battery changes, missing energy, and implausible measurements do not count.
+battery swaps, missing energy, and implausible measurements do not count.
 
-After 4 accepted windows the report starts offering a rough answer and says so:
+After 4 accepted windows a battery starts offering a rough answer and says so:
 
 ```text
-Model: provisional · 5 windows / 1 sessions
-Confidence: low · needs 5/12 windows · 1/3 sessions
-Usual remaining: 3h 48m
+      Model            provisional · 5 windows / 1 sessions
+      From this level  3h 48m
 ```
 
 It reaches `ready` at 12 accepted 15-minute windows from 3 discharge sessions.
@@ -82,15 +129,14 @@ It reaches `ready` at 12 accepted 15-minute windows from 3 discharge sessions.
 ### Reading the range
 
 ```text
-Usual remaining: 3h 48m
-Range: 3h 20m – 4h 15m · p25–p75
-Right now: 2h 10m · 18.4 W over the last 4 windows
+      From this level  3h 48m
+      Range            3h 20m – 4h 15m · p25–p75
 ```
 
-`Usual remaining` is the typical answer. `Range` says how wrong it could be:
-half of your recorded windows fall inside it. `Right now` uses only the newest
-few windows, so it drops when the machine is working hard and the 30-day
-typical figure has not caught up.
+`From this level` is the typical answer for that battery. `Range` says how
+wrong it could be: half of that battery's recorded windows fall inside it. A
+heavier draw buys less time, so the low edge comes from the heavier quarter of
+its windows.
 
 ### While charging
 
@@ -103,8 +149,11 @@ If unplugged now: 3h
 At full: 5h
 ```
 
-A charge threshold appears as `plugged in · charge held`. At full charge the
-report removes the duplicate projections and shows one `Usual runtime` line.
+A charge threshold appears as `plugged in · charge held`, and the battery
+holding at its cap says `held at 90%` on its own line. A battery that reports
+`Not charging` merely because it is not its turn to charge is **not** reported
+as held. At full charge the report removes the duplicate projections and shows
+one `Pack runtime` line.
 
 ### When collection restarts
 
@@ -114,14 +163,25 @@ A short warning explains why the active 15-minute sample restarted or paused:
 Sampling: restarted · battery set changed
 ```
 
-This does not discard earlier valid history.
+This does not discard earlier valid history. Common reasons:
+
+| Reason | Meaning |
+| --- | --- |
+| `battery set changed` | A different battery is installed than when the window opened |
+| `polling gap or clock change` | The tracker missed several polls, so the window cannot be trusted |
+| `per-battery baseline missing after upgrade` | The session began under an older build; the next window records normally |
+| `no battery measurably discharged` | The window elapsed with no cell giving up measurable energy |
+| `stored energy increased` | The battery gained charge mid-window |
+| `implausible draw rejected` | The measured draw was outside anything a laptop battery produces |
 
 ## Respond to warnings
 
 | Report state                                          | Meaning                                                                     | What to do                                                                                         |
 | ----------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `Model: blocked · current battery energy unavailable` | Enough history exists, but the current battery cannot provide the numerator | Check `make status VERBOSE=1`; confirm every present battery exposes compatible energy data        |
+| `Model: blocked · this battery reports no capacity`   | Enough history exists, but that cell cannot provide the numerator            | Check `make status VERBOSE=1`; confirm the battery exposes compatible energy data                  |
 | `Model: unavailable · unsupported history format`     | The history file is from an unknown schema                                  | Keep the file for diagnosis; do not edit it in place                                               |
+| `Legacy rows: N pack-level row(s)`                    | History recorded before evidence was kept per battery                       | Nothing; those rows cannot be attributed to a cell and are ignored                                 |
+| `Battery identity: weak`                              | The firmware reports no serial, so identical spare batteries look alike      | Nothing to fix; evidence for such spares may be pooled together                                     |
 | `Data: stale`                                         | The tracker has not refreshed state for several poll intervals              | Run `make install`, then inspect failed user services if the warning remains                       |
 | `Data: clock mismatch`                                | The recorded update is in the future relative to the current clock          | Correct the clock and wait for a tracker poll                                                      |
 | `Battery: not detected`                               | No present `BAT*` supply exists                                             | Reinsert a removable battery or verify `/sys/class/power_supply`                                   |
@@ -138,9 +198,14 @@ Keep the default report concise. Add diagnostics only when troubleshooting:
 make status VERBOSE=1
 ```
 
-Verbose mode adds the state-file location, retained/recent history counts, last
-accepted model observation, active session/window, and battery-set fingerprint.
-It still avoids serial numbers, model IDs, application names, and personal data.
+Verbose mode adds the state-file location, the view and state schema versions,
+retained/recent history counts, the last accepted model observation, the active
+session and window, and the battery-set key.
+
+Battery identity — vendor, model, and serial — is recorded, because evidence
+has to be anchored to the cell that produced it and capacity is not identity.
+It stays in your own state directory and is never transmitted. Application
+names and other personal data are still never collected.
 
 For exhaustive field and state definitions, see the
 [status output reference](../dev/status-output-reference.md). For installation

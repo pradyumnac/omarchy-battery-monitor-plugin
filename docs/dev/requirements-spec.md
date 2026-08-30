@@ -39,31 +39,55 @@ This doc is the single source of pending work. GitHub issues are archived
 | Unknown uninstall options fail before removing files | `tests/uninstall.test.js` |
 | Install and both uninstall targets perform a full shell restart | `tests/uninstall.test.js` |
 | Install refuses on a machine with no battery | `tests/preflight.test.js` |
-| Seeded history produces current-energy and peak-capacity runtime projections | `tests/tracker.test.js` |
 | A valid 15-minute discharge window is recorded | `tests/tracker.test.js` |
-| Recent median ignores outliers and older back-reference data | `tests/tracker.test.js` |
 | Future-dated history is retained for diagnosis but excluded from learning | `tests/tracker.test.js`, `tests/intelligence-status.test.js` |
-| History is bounded to 96 rows and 180 days | `tests/tracker.test.js` |
+| History is bounded to 96 rows per battery over 180 days | `tests/tracker.test.js` |
 | Invalid/discontinuous windows are rejected | `tests/tracker.test.js` |
 | Battery topology changes invalidate only the active window | `tests/tracker.test.js` |
 | Unknown history schemas are ignored safely | `tests/tracker.test.js` |
 | `make status` renders a concise summary without systemd logs or raw state | `tests/intelligence-status.test.js` |
-| Legacy state derives remaining runtime without false `learning` status | `tests/intelligence-status.test.js` |
 | Learning, ready, blocked, unavailable, stale/cached, and clock states are distinct | `tests/intelligence-status.test.js` |
 | Charging, full, and charge-threshold hold use context-specific runtime labels | `tests/intelligence-status.test.js` |
 | No present battery suppresses stale persisted runtime | `tests/intelligence-status.test.js` |
 | Model freshness, archived history, and sampling reset reasons are conditional | `tests/intelligence-status.test.js`, `tests/tracker.test.js` |
 | `VERBOSE=1` adds collection diagnostics without changing the concise default | `tests/intelligence-status.test.js` |
 | Status colors can be forced or disabled for noninteractive output | `tests/intelligence-status.test.js` |
-| Model learning reports capped 12-window and 3-session progress | `tests/intelligence-status.test.js` |
-| One health and power summary line for each present battery, whatever it is named | `tests/intelligence-status.test.js` |
-| Charge-threshold hold read from sysfs status and stop threshold | `tests/model.test.js` |
+| Each battery reports capped 12-window and 3-session progress of its own | `tests/intelligence-status.test.js` |
+| One block per present battery, identity first, whatever it is named | `tests/intelligence-status.test.js` |
+| Charge-threshold hold requires the battery to have reached its own cap | `tests/model-lib.test.js`, `tests/tracker.test.js`, `tests/intelligence-status.test.js` |
 | State icon severity ranks charge level above threshold hold and full charge | `tests/model.test.js` |
+| Battery identity built from vendor, model and serial, with separators neutralised | `tests/model-lib.test.js` |
+| A pack key is stable regardless of the order its batteries are presented | `tests/model-lib.test.js` |
+| Firmware with no serial is reported as weak identity, not silently merged | `tests/model-lib.test.js`, `tests/view.test.js` |
+| One battery's evidence never reaches another battery's projection | `tests/model-lib.test.js`, `tests/view.test.js` |
+| A battery with no evidence of its own stays unmodelled | `tests/view.test.js` |
+| Evidence for a battery that is not installed is listed but never modelled | `tests/view.test.js`, `tests/intelligence-status.test.js` |
+| Only the battery that actually discharged records a window | `tests/tracker.test.js` |
+| Capacity recalibration does not restart sampling; an identity change does | `tests/tracker.test.js` |
+| A window with no per-battery baseline restarts and names the reason | `tests/tracker.test.js` |
+| An append is only claimed when a row was actually written | `tests/tracker.test.js` |
+| Pack-level rows from schema v1 and v2 are dropped on migration | `tests/tracker.test.js` |
+| Held-out scoring never sees the window it predicts | `tests/model-lib.test.js`, `tests/backtest.test.js` |
+| Estimator selection holds on steady load, switches on a real shift, ignores noise | `tests/model-lib.test.js` |
+| Estimator selection refuses to choose on thin evidence | `tests/model-lib.test.js` |
+| A corrupt or missing estimator store falls back to the default | `tests/model-lib.test.js` |
+| The tracker records a selected estimator when it records a window | `tests/tracker.test.js` |
+| The view projects with each battery's recorded estimator | `tests/view.test.js` |
+| The backtest reports the selection the tracker would make | `tests/backtest.test.js` |
+| The view is one versioned document that rejects a schema it cannot read | `tests/view.test.js`, `tests/model.test.js` |
+| The panel keeps its last good view rather than blanking on a bad payload | `tests/model.test.js` |
+| Each battery's current charge is reported, with fallbacks when it is unavailable | `tests/intelligence-status.test.js` |
+| The sampling window is reported against the battery being measured | `tests/intelligence-status.test.js` |
+| CSV export splits identity into columns and quotes text fields | `tests/export.test.js` |
 
 ## Manual check before a release
 
 - [ ] Connect the charger with BAT0 and BAT1 present.
 - [ ] Confirm `Plugged` shows only the charging battery and its percentage.
+- [ ] Confirm a battery below its charge cap is listed under `Not charging`,
+      not under `⚠ Charge threshold`.
+- [ ] Confirm the panel shows `⌁ Limit` only once a battery really reaches its
+      configured cap.
 - [ ] Confirm the bar shows the combined percentage without opening the panel.
 - [ ] Disconnect the charger and confirm the response is immediate.
 - [ ] Confirm `Unplugged` shows the approximate duration.
@@ -84,7 +108,7 @@ This doc is the single source of pending work. GitHub issues are archived
       warning appears, and the report gives one recovery action.
 - [ ] Run `make status VERBOSE=1` and confirm diagnostics appear without serials,
       model IDs, applications, or other personal data.
-- [ ] Confirm model learning shows both `X/12 windows` and `Y/3 sessions`, and
+- [ ] Confirm each battery block shows its own `X/12 windows` and `Y/3 sessions`, and
       `NO_COLOR=1 make status` removes ANSI styling.
 - [ ] Run `make uninstall`, reinstall, and confirm history is retained.
 - [ ] Run `make uninstall-purge-data` only on disposable test data and confirm

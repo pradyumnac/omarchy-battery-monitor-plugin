@@ -1,3 +1,11 @@
+> **Superseded.** This proposal predates the per-battery model. Evidence is
+> now anchored to each battery's identity and projected from that cell's own
+> windows, which addresses the problem this described from a different
+> direction. Kept for the reasoning; see
+> [architecture](architecture.md#one-model-per-battery) and
+> [the research notes](../research/battery-runtime-modelling.md) for what
+> shipped.
+
 # Usable-capacity and runtime diagnostics
 
 ## Implemented diagnostic split

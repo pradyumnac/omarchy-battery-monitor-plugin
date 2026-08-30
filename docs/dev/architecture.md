@@ -106,28 +106,68 @@ increases, implausible draw, missing measurements, and battery-topology changes
 invalidate only the active window. The tracker records evidence; it computes no
 estimate.
 
-The view retains up to 96 valid windows for 180 days but calculates `Usual`
-from only the most recent 30 days. It requires 12 windows across 3 discharge
-sessions to call the model `ready`, and 4 windows to offer a `provisional`
-estimate with an explicit low-confidence label instead of showing a new user
-nothing for days. `Usual` projects from energy currently stored, so it
-decreases with charge level; `At full` projects from current full usable
-capacity. Both adapt to battery health and recent usage.
+### One model per battery
 
-Alongside the point estimate the view reports a p25–p75 band from the same
-sorted draws — a heavier draw buys less time, so the p75 draw sets the low edge
-— and a "right now" estimate over the newest few windows, which tracks a
-workload shift within the hour that a 30-day median cannot see.
+Evidence is recorded, retained, and modelled **per battery**, anchored to that
+cell's identity — vendor, model, and serial — rather than to its capacity,
+which drifts with wear and calibration and so cannot identify anything.
+
+A projection answers "how long will this cell last from where it is now", and
+that depends on its own capacity, age, and discharge curve. Mixing a worn
+battery's measurements with a healthy one produces a number describing neither,
+so another battery's windows are never consulted. Evidence for a battery that
+is no longer installed is reported by `make status` and never modelled.
+
+These batteries discharge in sequence rather than together: while one supplies
+the system the other sits idle. So an idle battery records nothing for that
+window — a row of zeros would bury its real draw — and the pack figure is the
+sum of the per-battery projections.
+
+Retention is per battery too, at 96 windows each over 180 days, because a
+shared cap would let a heavily used cell evict the evidence of one swapped in
+only occasionally.
+
+The view calculates from the most recent 30 days. A battery needs 12 windows
+across 3 discharge sessions to be `ready`, and 4 to offer a `provisional`
+estimate with an explicit low-confidence label rather than showing a new user
+nothing for days. Alongside the point estimate it reports a p25–p75 band from
+the same sorted draws — a heavier draw buys less time, so the p75 draw sets the
+low edge.
+
+### The estimator each battery uses
+
+Several estimators compete: the median of its windows, the mean of its newest
+few, an exponentially weighted average, and the previous window alone. The
+tracker scores them against that battery's own held-out windows whenever it
+records one, and writes the winner to `estimators.tsv`; every reader looks the
+answer up.
+
+The cost is deliberately placed on the 15-minute window-append path rather than
+the panel refresh, which reads the view every five seconds while open. Scoring
+is far too expensive to repeat there, and the answer cannot change without a
+new window.
+
+The median is the incumbent and keeps the job unless a challenger beats it by a
+clear margin. Scores drift window to window, so without a margin the choice
+would flap between estimators separated by noise — and a projection that
+silently changes shape is harder to trust than one consistently a little worse.
 
 ### Nothing ships on plausibility
 
 `docs/research/battery-runtime-modelling.md` requires a measurable held-out
 improvement before a model change ships. `scripts/battery-backtest.sh`
-(`make backtest`) is the harness that produces it: it replays the history in
-order and, at each row, predicts that row using only the rows before it, then
-scores each candidate estimator against the observed draw. `last` — simply the
-previous window — is the naive baseline; an estimator that cannot beat it is
-not learning anything.
+(`make backtest`) is the harness that produces it: for each battery it replays
+that battery's windows in order and, at each one, predicts using only the
+windows before it, then scores each candidate against the observed draw. `last`
+— simply the previous window — is the naive baseline; an estimator that cannot
+beat it is not learning anything.
+
+The report and the running model share one implementation,
+`battery_model_score_draws()`, so they cannot reach different verdicts. The
+report also states the selection the tracker would make.
+
+`make export` writes the same history as CSV, with identity split into columns,
+for exploring a question in a notebook before committing it to shell.
 
 ## Two scripts, one state file
 

@@ -21,7 +21,8 @@ there is no separate user-facing intelligence target.
 | ------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `systemctl --user is-active`          | Tracker and monitor health                                                                      |
 | Tracker `state`                       | Power session, current/full energy, runtime projections, freshness, active window, reset reason |
-| `discharge-history.tsv`               | Recent/archived counts, distinct sessions, median draw/capacity, last learned time              |
+| `discharge-history.tsv`               | Per-battery window and session counts, that battery's draw, last learned time                   |
+| `estimators.tsv`                      | Which estimator each battery projects with, and the held-out error that earned it               |
 | `/sys/class/power_supply/BAT*/status` | Distinguishes charging, full, and charge-threshold hold; detects no present battery             |
 | `/sys/class/power_supply/BAT*/energy_full`, `energy_full_design`, `power_now` | Per-battery health, full-charge energy, and live power flow (`charge_*` files are the fallback) |
 
@@ -44,13 +45,13 @@ Fields are conditional; absent information is not printed as a misleading zero.
 | `Battery`          | No present battery                          | Runtime state is suppressed because persisted data may be stale                              |
 | `Power`            | State exists                                | On battery, charging, full, held, or generically plugged; includes observed session duration |
 | `Energy`           | State exists                                | Current aggregate energy / current full usable capacity and derived percentage               |
-| `Model`            | Always after state/history inspection       | `waiting`, `learning`, `provisional`, `ready`, `blocked`, or `unavailable`                    |
+| `Pack model`       | Always after state/history inspection        | `waiting`, `learning`, `provisional`, `ready`, or `unavailable`; only as certain as its least certain battery |
 | `Confidence`       | Model provisional                           | Says the estimate is low-confidence and how much evidence is still missing                    |
 | `Evidence`         | Model blocked after its gate                | Recent windows and sessions prove learning is complete                                       |
-| `Usual remaining`  | Ready and discharging                       | Current stored energy / learned median draw                                                  |
+| `Pack remaining`   | Some battery has a usable model, discharging | Sum of the per-battery projections from current stored energy                                |
 | `If unplugged now` | Ready and plugged below full                | The same current-energy projection, labelled for charging context                            |
-| `At full`          | Ready below full                            | Full usable capacity / learned median draw                                                   |
-| `Usual runtime`    | Ready and full                              | Single full runtime; avoids duplicate current/full lines                                     |
+| `At full`          | Some battery has a usable model, below full  | Sum of the per-battery projections from full usable capacity                                 |
+| `Pack runtime`     | Some battery has a usable model, at full     | Single full runtime; avoids duplicate current/full lines                                     |
 | `Typical draw`     | Ready or provisional                        | Median recent valid-window draw                                                              |
 | `Range`            | A p25–p75 band is available                 | How wrong the estimate could be; the p75 draw sets the low edge                               |
 | `Right now`        | Recent windows exist                        | Estimate over the newest few windows, which tracks a workload shift within the hour           |

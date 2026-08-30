@@ -9,13 +9,31 @@ Thanks for helping improve T480 Omarchy Battery Monitor.
    tracking — that file is the source of pending work.
 2. Keep changes focused and portable across laptops.
 3. Follow the constraints in [README.md](README.md#constraints) —
-   user-level paths only, no root, no host-identifying data in Git.
+   user-level paths only, no root, nothing host-identifying committed to Git.
+   Battery identity is recorded in the user's own state directory by design;
+   it must never end up in the repository or leave the machine.
 
 ## Local checks
 
 ```sh
-make check
+make check   # syntax, unit files, qmllint, JS parse
+make test    # the Node suite
 ```
+
+Two rules carry most of the weight here:
+
+- **Model rules live in `service/battery-model.sh`.** The evidence gate, the
+  window arithmetic, the projection, the threshold rule, and the scoring each
+  exist exactly once. A second copy is free to disagree with the first, which
+  is how several shipped bugs happened.
+- **Consumers read the aggregated view, never the internals.** If the panel or
+  a report needs a field, add it to `service/battery-view.sh`; do not reach
+  past it to sysfs or the state file. See
+  [the view reference](docs/dev/view-reference.md).
+
+No model change ships on plausibility. `make backtest` scores candidates
+against each battery's own held-out windows, and `make export` writes the same
+history as CSV for exploring a question in a notebook first.
 
 For UI changes, test on a laptop with one and two batteries when possible. Also check that the widget stays hidden on a desktop without laptop batteries.
 Use `make status` for the concise lifecycle report and
