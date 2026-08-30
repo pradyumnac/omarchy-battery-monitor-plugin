@@ -380,6 +380,104 @@ describe("the runtime model in the view", () => {
     });
   });
 
+  test("attributes windows to the battery set that measured them", () => {
+    withViewFixture((f) => {
+      // A dead cell replaced by a healthy one. Draw is a property of the
+      // machine, so every window still feeds the draw model - but the swap is
+      // recorded and reported rather than passing unremarked.
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        energy_now: 30000000,
+        energy_full: 38000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: " 1020",
+      });
+      writeState(f.state);
+      const oldPack = "BAT0:LGC:01AV420:1020,BAT1:SMP:DEADCELL:999";
+      const newPack = "BAT0:LGC:01AV420:1020";
+      writeHistory(f.state, [
+        ...Array.from(
+          { length: 10 },
+          (_, index) =>
+            `${19990000 + index}\told-${index % 3}\t5000\t15000000\t${oldPack}`,
+        ),
+        ...Array.from(
+          { length: 5 },
+          (_, index) =>
+            `${19995000 + index}\tnew-${index % 2}\t9000\t38000000\t${newPack}`,
+        ),
+      ]);
+
+      const document = runView(f);
+      assert.equal(document.sampling.pack_key, newPack);
+      assert.equal(document.history.foreign_pack, 10);
+      assert.equal(document.history.previous_pack, oldPack);
+      // All fifteen windows remain draw evidence; the gate is not reset.
+      assert.equal(document.model.windows, 15);
+    });
+  });
+
+  test("a battery set is identified by serial, not by capacity", () => {
+    withViewFixture((f) => {
+      // Same make and model, different unit. Capacity alone would call these
+      // the same set; the serial is what tells two spares apart.
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        energy_now: 40000000,
+        energy_full: 50000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
+      });
+      writeState(f.state);
+      writeHistory(f.state, [
+        "19990000\ts0\t10000\t50000000\tBAT0:LGC:01AV420:2040",
+      ]);
+
+      const document = runView(f);
+      assert.equal(document.sampling.pack_key, "BAT0:LGC:01AV420:1020");
+      assert.equal(document.history.foreign_pack, 1);
+    });
+  });
+
+  test("says so when firmware reports no serial to tell spares apart", () => {
+    withViewFixture((f) => {
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        energy_now: 40000000,
+        energy_full: 50000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+      });
+      writeState(f.state);
+      const document = runView(f);
+      assert.equal(document.sampling.pack_key_weak, true);
+    });
+  });
+
+  test("version-1 rows stay evidence but are never attributed to a set", () => {
+    withViewFixture((f) => {
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        energy_now: 40000000,
+        energy_full: 50000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
+      });
+      writeState(f.state);
+      // Four-column rows written before identity tracking existed.
+      writeHistory(f.state, readyHistory(10000));
+
+      const document = runView(f);
+      assert.equal(document.model.windows, 12);
+      assert.equal(document.model.state, "ready");
+      assert.equal(document.history.unattributed, 12);
+      assert.equal(document.history.foreign_pack, 0);
+    });
+  });
+
   test("blocks the model when the battery reports no energy", () => {
     withViewFixture((f) => {
       writeBattery(f.root, "BAT0", { present: 1, status: "Discharging" });

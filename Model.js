@@ -56,6 +56,11 @@ function emptyView() {
     remainingHighSeconds: 0,
     recentDrawMw: 0,
     recentRemainingSeconds: 0,
+    foreignPackWindows: 0,
+    unattributedWindows: 0,
+    previousPack: "",
+    packKey: "",
+    packKeyWeak: false,
     uptimeSeconds: 0,
     profiles: [],
     activeProfile: "",
@@ -116,6 +121,16 @@ function parseView(raw) {
   view.remainingHighSeconds = viewNumber(model.remaining_high_seconds);
   view.recentDrawMw = viewNumber(model.recent_draw_mw);
   view.recentRemainingSeconds = viewNumber(model.recent_remaining_seconds);
+
+  var history = parsed.history || {};
+  // Evidence recorded on a battery set that is no longer installed. Non-zero
+  // means the pack changed and earlier windows stopped counting.
+  view.foreignPackWindows = viewNumber(history.foreign_pack);
+  view.unattributedWindows = viewNumber(history.unattributed);
+  view.previousPack = String(history.previous_pack || "");
+  var sampling = parsed.sampling || {};
+  view.packKey = String(sampling.pack_key || "");
+  view.packKeyWeak = sampling.pack_key_weak === true;
 
   view.uptimeSeconds = viewNumber(system.uptime_seconds);
 

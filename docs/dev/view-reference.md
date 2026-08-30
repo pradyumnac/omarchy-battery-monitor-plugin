@@ -95,6 +95,11 @@ model has nothing to say.
 | --- | --- |
 | `history.state` | `ready`, `missing`, or `unsupported` |
 | `history.total` / `recent` / `archived` / `future` | Row counts; `future` rows are retained for diagnosis but are never evidence |
+| `history.foreign_pack` | Windows inside the lookback measured on a different, identified battery set. They still count as draw evidence — draw belongs to the machine — but a non-zero value means the pack changed |
+| `history.unattributed` | Version-1 windows, recorded before identity tracking. Evidence, but never assigned to a set |
+| `history.previous_pack` | Key of the most recent other set, or empty |
+| `sampling.pack_key` | Identity of the set installed now: `NAME:VENDOR:MODEL:SERIAL` per battery, comma separated in name order |
+| `sampling.pack_key_weak` | `true` when the firmware publishes no serial, so two identical spare batteries cannot be told apart. Say so rather than implying certainty |
 | `sampling.window_start_epoch` / `window_seconds` / `window_target_seconds` | Progress of the open discharge window |
 | `sampling.reset_reason` | Why the open window last restarted, or empty |
 | `sampling.session_id` / `fingerprint` | Current discharge session, and the battery set it belongs to |

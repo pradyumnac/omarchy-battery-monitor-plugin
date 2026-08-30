@@ -47,7 +47,13 @@ readonly BATTERY_MODEL_RECENT_WINDOWS=4
 readonly BATTERY_MODEL_MIN_DRAW_MW=100
 readonly BATTERY_MODEL_MAX_DRAW_MW=120000
 
-readonly BATTERY_MODEL_HISTORY_HEADER=$'# battery-discharge-history\tv1'
+# Version 2 added a fifth column: the identity of the battery set a window was
+# measured on. Version-1 rows stay readable and still count as draw evidence —
+# draw is a machine property — but they carry no identity, so they can never be
+# attributed to a set. The header is rewritten to v2 the next time a row is
+# appended.
+readonly BATTERY_MODEL_HISTORY_HEADER=$'# battery-discharge-history\tv2'
+readonly BATTERY_MODEL_HISTORY_HEADER_V1=$'# battery-discharge-history\tv1'
 
 # The tracker state file's schema. v1 files carry no version key and also carry
 # derived model fields (battery_energy_now_uwh, usual_*) that v2 dropped: the
@@ -68,8 +74,13 @@ battery_model_latest_epoch=0
 battery_model_latest_draw_mw=0
 battery_model_latest_capacity_uwh=0
 battery_model_draws=()          # in-window draws, ascending
-battery_model_capacities=()     # in-window capacities, ascending
 battery_model_recent_draws=()   # newest BATTERY_MODEL_RECENT_WINDOWS draws
+# Attribution of the evidence inside the lookback. Every row still counts as
+# draw evidence — draw belongs to the machine — but the split says which
+# battery set produced it, so a swap is visible instead of silent.
+battery_model_foreign_windows=0      # measured on a different, identified set
+battery_model_unattributed_windows=0 # version-1 rows, recorded before identity
+battery_model_previous_pack=""       # key of the most recent other set
 
 battery_model_history_valid() {
   local first_line
@@ -77,7 +88,8 @@ battery_model_history_valid() {
   # Read the header in bash rather than forking `head`: the view calls this on
   # every panel refresh.
   IFS= read -r first_line <"$1" 2>/dev/null || return 1
-  [[ $first_line == "$BATTERY_MODEL_HISTORY_HEADER" ]]
+  [[ $first_line == "$BATTERY_MODEL_HISTORY_HEADER" ||
+    $first_line == "$BATTERY_MODEL_HISTORY_HEADER_V1" ]]
 }
 
 # Sort a numeric array in place, ascending. Insertion sort with no subprocess:
@@ -98,8 +110,8 @@ battery_model_sort_numbers() {
 # Read the discharge history once and populate every battery_model_* global.
 # Usage: battery_model_load_history HISTORY_FILE NOW_EPOCH
 battery_model_load_history() {
-  local history_file=$1 now=$2
-  local kind first second third session index
+  local history_file=$1 now=$2 current_pack_key=${3-}
+  local kind first second third session pack index
   local -A seen_sessions=()
 
   battery_model_state="missing"
@@ -111,8 +123,10 @@ battery_model_load_history() {
   battery_model_latest_draw_mw=0
   battery_model_latest_capacity_uwh=0
   battery_model_draws=()
-  battery_model_capacities=()
   battery_model_recent_draws=()
+  battery_model_foreign_windows=0
+  battery_model_unattributed_windows=0
+  battery_model_previous_pack=""
 
   [[ -f "$history_file" ]] || return 0
   if ! battery_model_history_valid "$history_file"; then
@@ -124,11 +138,20 @@ battery_model_load_history() {
   # One pass over the file. Each `D` line is a row inside the lookback, in file
   # order, so the tail is the newest evidence; the trailing `S` line carries
   # the counters that need the whole file to compute.
-  while IFS=$'\t' read -r kind first second third session; do
+  while IFS=$'\t' read -r kind first second third session pack; do
     case $kind in
     D)
+      # Draw is a property of the machine and its workload, so every row feeds
+      # the draw model whichever set measured it. Identity only decides how the
+      # evidence is attributed and reported.
+      if [[ -z $pack ]]; then
+        battery_model_unattributed_windows=$((battery_model_unattributed_windows + 1))
+      elif [[ -n $current_pack_key && $pack != "$current_pack_key" ]]; then
+        # Rows arrive oldest first, so this ends on the most recent other set.
+        battery_model_foreign_windows=$((battery_model_foreign_windows + 1))
+        battery_model_previous_pack=$pack
+      fi
       battery_model_draws+=("$second")
-      battery_model_capacities+=("$third")
       battery_model_window_count=$((battery_model_window_count + 1))
       if [[ -n $session && -z ${seen_sessions[$session]+x} ]]; then
         seen_sessions["$session"]=1
@@ -152,12 +175,12 @@ battery_model_load_history() {
         total++
         if ($1 > now) { future++; next }
         if ($1 < cutoff) next
-        printf "D\t%s\t%s\t%s\t%s\n", $1, $3, $4, $2
+        printf "D\t%s\t%s\t%s\t%s\t%s\n", $1, $3, $4, $2, $5
         if ($1 >= latest) { latest = $1; last_draw = $3; last_capacity = $4 }
       }
       END {
-        printf "S\t%d\t%d\t%d\t\n", total, future, latest
-        printf "L\t%d\t%d\t0\t\n", last_draw + 0, last_capacity + 0
+        printf "S\t%d\t%d\t%d\t\t\n", total, future, latest
+        printf "L\t%d\t%d\t0\t\t\n", last_draw + 0, last_capacity + 0
       }
     ' "$history_file"
   )
@@ -170,7 +193,6 @@ battery_model_load_history() {
   done
 
   battery_model_sort_numbers battery_model_draws
-  battery_model_sort_numbers battery_model_capacities
 }
 
 # --- Statistics ------------------------------------------------------------
@@ -271,6 +293,69 @@ battery_model_window_draw_mw() {
 battery_model_window_complete() {
   local elapsed_seconds=$1
   ((elapsed_seconds >= BATTERY_MODEL_WINDOW_SECONDS))
+}
+
+# --- Battery-set identity --------------------------------------------------
+#
+# Capacity is not identity. A cell's reported energy_full drifts with wear and
+# recalibration, and two different batteries can report the same capacity, so
+# telling battery sets apart by capacity is guesswork. sysfs already publishes
+# a real identity — manufacturer, model, serial — and that is what evidence is
+# anchored to.
+#
+# What the anchor is for: system draw is a property of the machine and its
+# workload, not of the battery, so draw evidence is shared across every set.
+# How long a given charge level lasts is a property of the battery, because a
+# worn cell's reported energy is exactly the number that stops being true. The
+# identity is what lets those two be told apart, audited, and — once battery
+# data is pooled across machines — matched against the same model elsewhere.
+
+# One field of an identity, made safe for the tab-separated history and for the
+# ":" and "," the key itself uses as separators.
+battery_model_sanitize_field() {
+  local value=$1
+  value=${value//[$'\t\n\r']/ }
+  value=${value//:/_}
+  value=${value//,/_}
+  # Trim surrounding whitespace: sysfs pads some serials (" 1020").
+  value=${value#"${value%%[![:space:]]*}"}
+  value=${value%"${value##*[![:space:]]}"}
+  printf '%s' "$value"
+}
+
+# A stable key for one battery: NAME:VENDOR:MODEL:SERIAL.
+#
+# Serial is what separates two otherwise identical spare batteries. When the
+# firmware leaves it empty the key still forms, but it can no longer tell such
+# spares apart — battery_model_pack_key_is_weak() reports that rather than
+# letting the ambiguity pass silently.
+battery_model_battery_key() {
+  local name=$1 vendor=$2 model=$3 serial=$4
+  printf '%s:%s:%s:%s' \
+    "$(battery_model_sanitize_field "$name")" \
+    "$(battery_model_sanitize_field "$vendor")" \
+    "$(battery_model_sanitize_field "$model")" \
+    "$(battery_model_sanitize_field "$serial")"
+}
+
+# A key for the whole installed set: every battery key, comma separated, in
+# name order so the same physical set always produces the same string.
+battery_model_pack_key() {
+  local sorted
+  sorted=$(printf '%s\n' "$@" | LC_ALL=C sort | paste -sd,)
+  printf '%s' "$sorted"
+}
+
+# Does this key identify its batteries only by model, with no serial to
+# separate two identical spares?
+battery_model_pack_key_is_weak() {
+  local key=$1 entry
+  [[ -n $key ]] || return 1
+  local IFS=','
+  for entry in $key; do
+    [[ $entry == *:*:*: ]] && return 0
+  done
+  return 1
 }
 
 # --- Charge-threshold holds ------------------------------------------------

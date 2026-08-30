@@ -127,6 +127,27 @@ capture_battery_fingerprint() {
   printf '%s' "$result"
 }
 
+# The identity of the installed battery set, from what sysfs publishes about
+# each cell. Recorded with every window so evidence can be attributed to the
+# batteries that produced it, and so a swap is visible afterwards rather than
+# only in the instant it happens.
+capture_pack_key() {
+  local battery_dir name vendor model serial
+  local -a keys=()
+  for battery_dir in "${battery_dirs[@]}"; do
+    name=${battery_dir##*/}
+    vendor=""
+    model=""
+    serial=""
+    [[ -f "$battery_dir/manufacturer" ]] && vendor=$(<"$battery_dir/manufacturer")
+    [[ -f "$battery_dir/model_name" ]] && model=$(<"$battery_dir/model_name")
+    [[ -f "$battery_dir/serial_number" ]] && serial=$(<"$battery_dir/serial_number")
+    keys+=("$(battery_model_battery_key "$name" "$vendor" "$model" "$serial")")
+  done
+  ((${#keys[@]} > 0)) || return 0
+  battery_model_pack_key "${keys[@]}"
+}
+
 capture_battery_capacity() {
   local battery_dir=$1 capacity=""
   if [[ -f "$battery_dir/energy_full" ]]; then
@@ -412,11 +433,15 @@ record_discharge_window() {
   tmp_file="$history_file.tmp.$$"
   {
     if [[ -f "$history_file" ]]; then
-      cat -- "$history_file"
+      # Rewrite the header to v2 and keep every existing row. Version-1 rows
+      # simply have no identity column; they stay valid draw evidence.
+      printf '%s\n' "$BATTERY_MODEL_HISTORY_HEADER"
+      tail -n +2 -- "$history_file"
     else
       printf '%s\n' "$BATTERY_MODEL_HISTORY_HEADER"
     fi
-    printf '%s\t%s\t%s\t%s\n' "$now" "$discharge_session_id" "$draw" "$(capture_energy_capacity_uwh)"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$now" "$discharge_session_id" "$draw" \
+      "$(capture_energy_capacity_uwh)" "$(capture_pack_key)"
   } >"$tmp_file"
   mv -f -- "$tmp_file" "$history_file"
   window_start_epoch=$now

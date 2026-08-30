@@ -91,6 +91,9 @@ function writeBatteries(stateDir, batteries, { acOnline = false } = {}) {
       energy_full_design: spec.energyFullDesign,
       power_now: spec.powerNow,
       capacity: spec.percent,
+      manufacturer: spec.manufacturer,
+      model_name: spec.modelName,
+      serial_number: spec.serial,
       charge_control_end_threshold: spec.endThreshold,
     };
     Object.entries(optional).forEach(([file, value]) => {
@@ -390,7 +393,7 @@ test("rejects an unsupported history schema visibly", () => {
     writeDefaultBattery(stateDir);
     fs.writeFileSync(
       path.join(stateDir, "discharge-history.tsv"),
-      "# battery-discharge-history\tv2\n",
+      "# battery-discharge-history\tv99\n",
     );
 
     const result = runStatus(stateDir);
@@ -442,6 +445,66 @@ test("reports archived history and sampling reset reasons", () => {
   });
 });
 
+test("announces a battery-set change instead of letting it pass unremarked", () => {
+  withFixture("status-pack-changed", (stateDir) => {
+    writeState(stateDir);
+    // Nine windows on a set holding a since-replaced cell, then three on the
+    // set installed now. Draw is a machine property, so all twelve still count
+    // toward the model - but the swap has to be visible.
+    const rows = ["# battery-discharge-history\tv2"];
+    const oldPack = "BAT0:LGC:01AV420:1020,BAT1:SMP:DEADCELL:999";
+    const newPack = "BAT0:LGC:01AV420:1020";
+    for (let index = 0; index < 9; index += 1) {
+      rows.push(
+        `${19999000 + index}\told-${index % 3}\t10000\t15000000\t${oldPack}`,
+      );
+    }
+    for (let index = 0; index < 3; index += 1) {
+      rows.push(
+        `${19999100 + index}\tnew-${index}\t10000\t50000000\t${newPack}`,
+      );
+    }
+    fs.writeFileSync(
+      path.join(stateDir, "discharge-history.tsv"),
+      rows.join("\n") + "\n",
+    );
+    writeBatteries(stateDir, [
+      {
+        status: "Discharging",
+        energyNow: 40000000,
+        energyFull: 50000000,
+        manufacturer: "LGC",
+        modelName: "01AV420",
+        serial: " 1020",
+      },
+    ]);
+
+    const result = runStatus(stateDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stdout,
+      /Battery set: changed · 9 of 12 windows were measured on a previous set/,
+    );
+    // The swap must not quietly reset learning: draw evidence is machine-wide.
+    assert.match(result.stdout, /Model: ready · 12 windows/);
+  });
+});
+
+test("flags version-1 rows as unattributed rather than assigning them a set", () => {
+  withFixture("status-unattributed", (stateDir) => {
+    writeState(stateDir);
+    writeHistory(stateDir);
+    writeDefaultBattery(stateDir);
+
+    const result = runStatus(stateDir);
+    assert.match(
+      result.stdout,
+      /Unattributed: 12 window\(s\) recorded before battery identity was tracked/,
+    );
+    assert.doesNotMatch(result.stdout, /Battery set: changed/);
+  });
+});
+
 test("verbose mode exposes collection diagnostics only on request", () => {
   withFixture("status-verbose", (stateDir) => {
     writeState(stateDir);
@@ -456,7 +519,7 @@ test("verbose mode exposes collection diagnostics only on request", () => {
     assert.match(verbose.stdout, /View schema: battery-view v1 · state v2/);
     assert.match(verbose.stdout, /History detail: 12 retained/);
     assert.match(verbose.stdout, /Last learned:/);
-    assert.match(verbose.stdout, /Battery set: BAT0:energy:50000000/);
+    assert.match(verbose.stdout, /Battery fingerprint: BAT0:energy:50000000/);
   });
 });
 

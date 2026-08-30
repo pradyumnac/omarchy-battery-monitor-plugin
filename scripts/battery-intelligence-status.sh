@@ -273,6 +273,27 @@ unavailable)
   ;;
 esac
 
+# A swapped battery used to pass unremarked: the only signal was
+# window_reset_reason, which the next recorded window cleared. Attribution is
+# recorded per window now, so the change stays visible afterwards.
+if ((view_history_foreign > 0)); then
+  field "Battery set" \
+    "changed · $view_history_foreign of $view_model_windows windows were measured on a previous set" \
+    "$yellow"
+  if [[ $verbose == 1 && -n $view_previous_pack ]]; then
+    field "Previous set" "${view_previous_pack//,/, }" "$dim"
+  fi
+fi
+if ((view_history_unattributed > 0)); then
+  field "Unattributed" \
+    "$view_history_unattributed window(s) recorded before battery identity was tracked" \
+    "$dim"
+fi
+if ((view_pack_key_weak == 1)); then
+  field "Battery identity" \
+    "weak · this firmware reports no serial, so identical spare batteries cannot be told apart" \
+    "$yellow"
+fi
 if ((view_history_archived > 0)); then
   field "History" "$view_history_recent recent · $view_history_archived archived" "$dim"
 fi
@@ -317,5 +338,6 @@ if [[ $verbose == 1 ]]; then
   else
     field "Window" "inactive" "$dim"
   fi
-  field "Battery set" "${view_battery_fingerprint//\\,/, }" "$dim"
+  field "Battery fingerprint" "${view_battery_fingerprint//\\,/, }" "$dim"
+  field "Battery set key" "${view_pack_key//,/, }" "$dim"
 fi

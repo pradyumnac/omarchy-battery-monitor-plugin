@@ -74,6 +74,11 @@ view_history_total=0
 view_history_recent=0
 view_history_archived=0
 view_history_future=0
+view_history_foreign=0        # windows recorded on a different, identified set
+view_history_unattributed=0   # version-1 rows, recorded before identity tracking
+view_previous_pack=""         # key of the most recent other set
+view_pack_key=""              # identity of the set installed now
+view_pack_key_weak=0          # 1 when no serial separates identical spares
 view_uptime_seconds=0
 view_active_profile=""
 view_profiles=()
@@ -89,6 +94,7 @@ view_bat_model=()
 view_bat_vendor=()
 view_bat_end_threshold=()
 view_bat_held=()          # parked at its own configured charge cap
+view_bat_serial=()
 
 # --- Helpers ---------------------------------------------------------------
 
@@ -177,8 +183,9 @@ battery_view_collect_state() {
 # panel shows, so no consumer forks `cat` per battery field.
 battery_view_collect_batteries() {
   local battery_dir name status capacity energy full design power threshold
-  local present cycles model vendor
+  local present cycles model vendor serial
   local charging=0 full_count=0 held=0 count=0
+  local -a pack_keys=()
 
   [[ -d "$power_supply_root" ]] || return 0
   view_sysfs_available=1
@@ -207,6 +214,7 @@ battery_view_collect_batteries() {
     battery_view_read cycles "$battery_dir/cycle_count"
     battery_view_read model "$battery_dir/model_name"
     battery_view_read vendor "$battery_dir/manufacturer"
+    battery_view_read serial "$battery_dir/serial_number"
 
     battery_view_nonnegative_int "$capacity" || capacity=0
     battery_view_nonnegative_int "$energy" || energy=0
@@ -225,6 +233,8 @@ battery_view_collect_batteries() {
     view_bat_cycle_count+=("$cycles")
     view_bat_model+=("$model")
     view_bat_vendor+=("$vendor")
+    view_bat_serial+=("$serial")
+    pack_keys+=("$(battery_model_battery_key "$name" "$vendor" "$model" "$serial")")
     view_bat_end_threshold+=("$threshold")
     if battery_model_threshold_held "$status" "$capacity" "$threshold"; then
       view_bat_held+=(1)
@@ -246,6 +256,11 @@ battery_view_collect_batteries() {
     Full) ((full_count += 1)) ;;
     esac
   done
+
+  if ((${#pack_keys[@]} > 0)); then
+    view_pack_key=$(battery_model_pack_key "${pack_keys[@]}")
+    battery_model_pack_key_is_weak "$view_pack_key" && view_pack_key_weak=1
+  fi
 
   if ((view_energy_capacity_uwh > 0 && view_energy_now_uwh > 0)); then
     view_charge_percent=$((view_energy_now_uwh * 100 / view_energy_capacity_uwh))
@@ -284,12 +299,19 @@ battery_view_collect_batteries() {
 battery_view_collect_model() {
   local history_file=$1 confidence p25 p75
 
-  battery_model_load_history "$history_file" "$view_generated_epoch"
+  # The installed set's identity is what each row's recorded identity is
+  # checked against, so a swap becomes visible instead of silent.
+  battery_model_load_history "$history_file" "$view_generated_epoch" \
+    "$view_pack_key"
   view_history_state=$battery_model_state
   view_history_total=$battery_model_total_rows
   view_history_recent=$battery_model_window_count
   view_history_future=$battery_model_future_rows
-  view_history_archived=$((battery_model_total_rows - battery_model_window_count - battery_model_future_rows))
+  view_history_foreign=$battery_model_foreign_windows
+  view_history_unattributed=$battery_model_unattributed_windows
+  view_previous_pack=$battery_model_previous_pack
+  view_history_archived=$((battery_model_total_rows - battery_model_window_count -
+    battery_model_future_rows))
   ((view_history_archived >= 0)) || view_history_archived=0
   view_model_windows=$battery_model_window_count
   view_model_sessions=$battery_model_session_count
@@ -424,6 +446,7 @@ battery_view_emit_json() {
   local power_state power_phase ac_online since_at_least
   local model_state history_state session_id reset_reason fingerprint
   local freshness batteries profiles active_profile sysfs_available
+  local previous_pack pack_key pack_key_weak
 
   battery_view_json_string power_state "$view_power_state"
   battery_view_json_string power_phase "$view_power_phase"
@@ -436,6 +459,9 @@ battery_view_emit_json() {
   battery_view_json_string reset_reason "$view_window_reset_reason"
   battery_view_json_string fingerprint "$view_battery_fingerprint"
   battery_view_json_string freshness "$view_freshness"
+  battery_view_json_string previous_pack "$view_previous_pack"
+  battery_view_json_string pack_key "$view_pack_key"
+  battery_view_json_bool pack_key_weak "$view_pack_key_weak"
   battery_view_json_string active_profile "$view_active_profile"
   battery_view_json_batteries batteries
   battery_view_json_profiles profiles
@@ -458,12 +484,14 @@ battery_view_emit_json() {
     "$view_remaining_low_seconds" "$view_remaining_high_seconds" \
     "$view_recent_draw_mw" "$view_recent_remaining_seconds" \
     "$view_recent_window_count" "$view_model_updated_epoch"
-  printf '  "history": {"state": %s, "total": %s, "recent": %s, "archived": %s, "future": %s},\n' \
+  printf '  "history": {"state": %s, "total": %s, "recent": %s, "archived": %s, "future": %s, "foreign_pack": %s, "unattributed": %s, "previous_pack": %s},\n' \
     "$history_state" "$view_history_total" "$view_history_recent" \
-    "$view_history_archived" "$view_history_future"
-  printf '  "sampling": {"session_id": %s, "window_start_epoch": %s, "window_seconds": %s, "window_target_seconds": %s, "reset_reason": %s, "fingerprint": %s},\n' \
+    "$view_history_archived" "$view_history_future" \
+    "$view_history_foreign" "$view_history_unattributed" "$previous_pack"
+  printf '  "sampling": {"session_id": %s, "window_start_epoch": %s, "window_seconds": %s, "window_target_seconds": %s, "reset_reason": %s, "fingerprint": %s, "pack_key": %s, "pack_key_weak": %s},\n' \
     "$session_id" "$view_window_start_epoch" "$view_window_seconds" \
-    "$BATTERY_MODEL_WINDOW_SECONDS" "$reset_reason" "$fingerprint"
+    "$BATTERY_MODEL_WINDOW_SECONDS" "$reset_reason" "$fingerprint" \
+    "$pack_key" "$pack_key_weak"
   printf '  "tracker": {"last_observed_epoch": %s, "age_seconds": %s, "freshness": %s},\n' \
     "$view_last_observed_epoch" "$view_tracker_age_seconds" "$freshness"
   printf '  "batteries": [%s],\n' "$batteries"

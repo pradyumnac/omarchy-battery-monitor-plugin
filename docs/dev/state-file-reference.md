@@ -64,12 +64,34 @@ normal session-duration rounding.
 
 ## Discharge history
 
-`discharge-history.tsv` uses the version-1 format:
+`discharge-history.tsv` uses the version-2 format:
 
 ```text
-# battery-discharge-history<TAB>v1
-<epoch><TAB><session-id><TAB><draw-mW><TAB><capacity-uWh>
+# battery-discharge-history<TAB>v2
+<epoch><TAB><session-id><TAB><draw-mW><TAB><capacity-uWh><TAB><pack-key>
 ```
+
+`pack-key` identifies the battery set that measured the window, as
+`NAME:VENDOR:MODEL:SERIAL` per battery, comma separated in name order.
+
+Version-1 rows have no `pack-key` and stay readable. They still count as draw
+evidence, and are reported as *unattributed* rather than being assigned to a
+set they may not belong to. The header is rewritten to v2 the next time a row
+is appended; no row is rewritten or discarded.
+
+### What identity is, and is not, used for
+
+Draw is a property of the machine and its workload — the laptop pulls the same
+watts whichever cell supplies them — so **every row feeds the draw model**,
+whichever set recorded it. Partitioning draw evidence per battery would throw
+away valid measurements and, worse, would starve the very user it was meant to
+serve: rotating three packs against a 12-window/3-session gate means 36 windows
+before any of them reads `ready`.
+
+What genuinely is battery-specific is how much runtime a reported charge level
+actually buys, because a worn cell's `energy_full` is exactly the number that
+stops being true. Identity anchors that, keeps the evidence auditable, and
+makes a swap visible instead of silent.
 
 Only the most recent 96 valid rows younger than 180 days are retained. The
 prune runs when a row is appended — the only moment the file can grow — rather
@@ -83,8 +105,19 @@ do not count as evidence.
 
 ## Guarantees
 
-- Only `BAT*` names, percentages, presence, and timestamps — never a serial
-  number, model ID, or other host-identifying data.
+- Battery identity **is** recorded: each window stores the manufacturer, model
+  name, and serial of the batteries that measured it. This is deliberate and
+  replaces an earlier guarantee that stored none of it.
+
+  Serial is what separates two otherwise identical spare batteries, so without
+  it a user who swaps between spares cannot have their evidence attributed
+  correctly — and capacity is not a substitute, because it drifts with wear and
+  collides between different cells. Manufacturer and model are what will let
+  observations be pooled across machines with the same battery later, which is
+  the point of recording them in the clear rather than as a digest.
+
+  The data stays in the user's own state directory and is never transmitted.
+  Anything that later shares it must ask first.
 - Every state and history write is atomic: write to a temp file, then rename.
 - Every write is user-only (`umask 077`).
 - A gap longer than `BATTERY_MODEL_MAX_POLL_GAP_SECONDS` in the same observed

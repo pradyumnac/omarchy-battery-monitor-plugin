@@ -122,7 +122,7 @@ describe("discharge history recording", () => {
         .trim()
         .split("\n");
       assert.equal(history.length, 97);
-      assert.equal(history[0], "# battery-discharge-history\tv1");
+      assert.equal(history[0], "# battery-discharge-history\tv2");
       assert.match(history[history.length - 1], /^20000000\t[0-9]+\t10000\t/);
       assert.doesNotMatch(history.join("\n"), /old-session/);
     });
