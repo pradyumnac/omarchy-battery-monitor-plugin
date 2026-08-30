@@ -558,14 +558,6 @@ Panel {
                 var val = rawHealth > 1 ? rawHealth : rawHealth * 100
                 return Math.round(val) + "%"
               }
-              // This battery's own runtime model, built only from its own
-              // windows. Named `projection` in the view so it cannot collide
-              // with `model`, which is the cell's model name.
-              readonly property var projection: extra.projection || ({})
-              readonly property string projectionStr: Model.batteryProjectionLabel(
-                batCard.projection, root.view.requiredWindows)
-              readonly property string projectionDrawStr: Model.batteryDrawLabel(batCard.projection)
-              readonly property bool projectionProvisional: batCard.projection.state === "provisional"
               readonly property string energyStr: (modelData.energy > 0 || modelData.energyCapacity > 0)
                 ? modelData.energy.toFixed(1) + " / " + modelData.energyCapacity.toFixed(1) + " Wh"
                 : ""
@@ -671,38 +663,6 @@ Panel {
                   Text {
                     visible: !!(batCard.extra.cycles && batCard.extra.cycles !== "")
                     text: "↻ " + batCard.extra.cycles
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.caption
-                    color: Qt.darker(root.bar.foreground, 1.35)
-                    anchors.verticalCenter: parent.verticalCenter
-                  }
-                }
-
-                // Row 3: what this battery's own evidence says about it.
-                // Each cell is modelled separately, so this number belongs to
-                // this card and not to the pack figure above.
-                Row {
-                  width: parent.width
-                  visible: batCard.projectionStr.length > 0
-
-                  Text {
-                    text: "◷ " + batCard.projectionStr
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.caption
-                    color: batCard.projectionProvisional
-                      ? Qt.darker(root.bar.foreground, 1.5)
-                      : Qt.darker(root.bar.foreground, 1.25)
-                    anchors.verticalCenter: parent.verticalCenter
-                  }
-
-                  Item {
-                    width: Math.max(0, parent.width - parent.children[0].implicitWidth - parent.children[2].implicitWidth)
-                    height: 1
-                  }
-
-                  Text {
-                    visible: batCard.projectionDrawStr.length > 0
-                    text: batCard.projectionDrawStr
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.caption
                     color: Qt.darker(root.bar.foreground, 1.35)

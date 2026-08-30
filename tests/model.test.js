@@ -87,58 +87,6 @@ test("parseView fills every field a panel binding reads", () => {
   assert.deepEqual(view.batteries, {});
 });
 
-test("labels a battery projection as the panel card writes it", () => {
-  // Given a battery whose model has met the full gate
-  // When the card label is built
-  // Then it is the plain runtime, with no qualifier
-  assert.equal(
-    Model.batteryProjectionLabel({ state: "ready", remainingSeconds: 4680 }),
-    "1h 18m",
-  );
-  // A provisional estimate is marked, so a rough number never reads as a firm one.
-  assert.equal(
-    Model.batteryProjectionLabel({ state: "provisional", remainingSeconds: 4680 }),
-    "~ 1h 18m",
-  );
-  // A battery still gathering its own evidence shows progress, not a number.
-  assert.equal(
-    Model.batteryProjectionLabel({ state: "learning", windows: 3 }, 12),
-    "learning 3/12",
-  );
-  assert.equal(
-    Model.batteryProjectionLabel({ state: "blocked-energy" }),
-    "no capacity reported",
-  );
-  assert.equal(
-    Model.batteryProjectionLabel({ state: "unavailable" }),
-    "history unreadable",
-  );
-  // Nothing to say is said with nothing, so the row hides entirely.
-  assert.equal(Model.batteryProjectionLabel({}), "");
-  assert.equal(Model.batteryProjectionLabel(undefined), "");
-  assert.equal(
-    Model.batteryProjectionLabel({ state: "ready", remainingSeconds: 0 }),
-    "",
-  );
-});
-
-test("names the estimator only when it is not the default", () => {
-  // Given the incumbent estimator
-  // When the draw label is built
-  // Then only the draw is shown, because naming the default is noise
-  assert.equal(
-    Model.batteryDrawLabel({ typicalDrawMw: 9500, estimator: "median" }),
-    "9.5W",
-  );
-  // A selected estimator earned its place and is worth surfacing.
-  assert.equal(
-    Model.batteryDrawLabel({ typicalDrawMw: 9500, estimator: "recent" }),
-    "9.5W · recent",
-  );
-  assert.equal(Model.batteryDrawLabel({ typicalDrawMw: 0 }), "");
-  assert.equal(Model.batteryDrawLabel(undefined), "");
-});
-
 test("formats the units the panel prints", () => {
   assert.equal(Model.formatWattHours(50000000), "50Wh");
   assert.equal(Model.formatWattHours(0), "");
