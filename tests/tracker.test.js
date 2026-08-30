@@ -521,12 +521,12 @@ describe("power session and notification transitions", () => {
         "6000",
         "Plugged",
       ]);
-      assert.equal(args[9], "BAT0 · 20%\n⚠ Charge threshold:\nBAT1 · 80%");
+      assert.equal(args[9], "BAT0 · 20%\nNot charging:\nBAT1 · 80%");
       assert.equal(args.length, 10);
     });
   });
 
-  test("uses Plugged with a charge-threshold block when a battery is held", () => {
+  test("uses Plugged with a charge-threshold block only once the cap is actually reached", () => {
     withBatteryFixture((f) => {
     const notifier = path.join(f.state, "notifier");
     const notificationLog = path.join(f.state, "notifications");
@@ -539,6 +539,7 @@ describe("power session and notification transitions", () => {
         present: 1,
         capacity: 95,
         status: "Not charging",
+        charge_control_end_threshold: 90,
       });
       runTracker(f);
       writeBattery(f.root, "AC", { type: "Mains", online: 1 });
@@ -554,6 +555,42 @@ describe("power session and notification transitions", () => {
       const args = fs.readFileSync(notificationLog, "utf8").split("\0");
       assert.equal(args[8], "Plugged");
       assert.equal(args[9], "⚠ Charge threshold:\nBAT0 · 95%");
+    });
+  });
+
+  test("reports a battery that is merely not charging without a false threshold claim", () => {
+    withBatteryFixture((f) => {
+      const notifier = path.join(f.state, "notifier");
+      const notificationLog = path.join(f.state, "notifications");
+      fs.writeFileSync(
+        notifier,
+        '#!/usr/bin/env bash\nprintf \'%s\\0\' "$@" >> "$BATTERY_NOTIFICATION_LOG"\n',
+        { mode: 0o700 },
+      );
+      // A dual-battery reserve pack: idle at 70%, far below its own 90% cap.
+      // sysfs reports the same "Not charging" string it would for a battery
+      // that is genuinely capped, so this must not be reported as one.
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        capacity: 70,
+        status: "Not charging",
+        charge_control_end_threshold: 90,
+      });
+      runTracker(f);
+      writeBattery(f.root, "AC", { type: "Mains", online: 1 });
+      runTracker(
+        f,
+        {
+          BATTERY_SESSION_NOTIFY_COMMAND: notifier,
+          BATTERY_NOTIFICATION_LOG: notificationLog,
+        },
+        ["--power-event"],
+      );
+
+      const args = fs.readFileSync(notificationLog, "utf8").split("\0");
+      assert.equal(args[8], "Plugged");
+      assert.equal(args[9], "Not charging:\nBAT0 · 70%");
+      assert.doesNotMatch(args[9], /Charge threshold/);
     });
   });
 

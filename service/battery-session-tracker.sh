@@ -171,37 +171,54 @@ format_session_minutes() {
   fi
 }
 
+# sysfs reports both "genuinely capped at a configured limit" and "not this
+# battery's turn yet" (dual-battery sequential charging) as the same
+# status=="Not charging" string, with no further detail. A raw status match
+# alone cannot tell those apart, so only claim "held at threshold" when the
+# battery's own percentage has actually reached its own configured cap;
+# everything else that is merely not charging is reported plainly instead of
+# with a false threshold claim.
 send_charge_notification() {
-  local battery_dir name status capacity detail description charging_block held_block
-  local -a charging_parts=() held_parts=()
+  local battery_dir name status capacity threshold detail
+  local description charging_block held_block idle_block
+  local -a charging_parts=() held_parts=() idle_parts=()
 
   for battery_dir in "${battery_dirs[@]}"; do
     name=${battery_dir##*/}
     status=""
     capacity=""
+    threshold=""
     [[ -f "$battery_dir/status" ]] && status=$(<"$battery_dir/status")
     [[ -f "$battery_dir/capacity" ]] && capacity=$(<"$battery_dir/capacity")
+    [[ -f "$battery_dir/charge_control_end_threshold" ]] &&
+      threshold=$(<"$battery_dir/charge_control_end_threshold")
     detail="$name"
     is_nonnegative_integer "$capacity" && detail+=" · ${capacity}%"
 
     if [[ $status == "Charging" ]]; then
       charging_parts+=("$detail")
     elif [[ $status == "Not charging" ]]; then
-      held_parts+=("$detail")
+      if is_nonnegative_integer "$capacity" && is_nonnegative_integer "$threshold" &&
+        ((threshold > 0 && capacity >= threshold)); then
+        held_parts+=("$detail")
+      else
+        idle_parts+=("$detail")
+      fi
     fi
   done
 
   charging_block=$(join_with_newline "${charging_parts[@]}")
-  if ((${#held_parts[@]} > 0)); then
-    held_block=$(join_with_newline "⚠ Charge threshold:" "${held_parts[@]}")
-    if [[ -n $charging_block ]]; then
-      description="$charging_block"$'\n'"$held_block"
-    else
-      description="$held_block"
-    fi
-  else
-    description="$charging_block"
-  fi
+  held_block=""
+  ((${#held_parts[@]} > 0)) && held_block=$(join_with_newline "⚠ Charge threshold:" "${held_parts[@]}")
+  idle_block=""
+  ((${#idle_parts[@]} > 0)) && idle_block=$(join_with_newline "Not charging:" "${idle_parts[@]}")
+
+  description=""
+  for block in "$charging_block" "$held_block" "$idle_block"; do
+    [[ -n $block ]] || continue
+    [[ -z $description ]] || description+=$'\n'
+    description+="$block"
+  done
 
   if [[ -n $notification_command ]] && command -v -- "$notification_command" >/dev/null 2>&1; then
     "$notification_command" --app-name doe.power -u low -g "󰂆" -t 6000 \
