@@ -40,7 +40,7 @@ log_write "$plugin_dir/service/"
 # Copy a standalone checkout into the standard Omarchy plugin location. If
 # the checkout is already installed there, avoid copying files onto itself.
 if [[ "$source_dir" != "$(realpath -m "$plugin_dir")" ]]; then
-  plugin_files=(Panel.qml Model.js manifest.json README.md LICENSE AGENTS.md)
+  plugin_files=(Panel.qml Model.js manifest.json README.md LICENSE)
   for name in "${plugin_files[@]}"; do
     cp -a -- "$source_dir/$name" "$plugin_dir/"
     log_write "$plugin_dir/$name"
