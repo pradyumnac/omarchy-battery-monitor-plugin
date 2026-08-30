@@ -148,7 +148,9 @@ battery_block() {
   local windows=${view_bat_windows[index]}
   local sessions=${view_bat_sessions[index]}
   local draw=${view_bat_typical_draw_mw[index]}
-  local identity detail health energy
+  local percent=${view_bat_percent[index]}
+  local energy_now=${view_bat_energy_now_uwh[index]}
+  local identity detail health charge
 
   # Trim the padding sysfs puts around some serials.
   serial=${serial#"${serial%%[![:space:]]*}"}
@@ -165,9 +167,20 @@ battery_block() {
   else
     health="health N/A"
   fi
-  energy="-"
-  ((full > 0)) && energy=$(format_energy "$full")
-  detail="$health · $energy · ${view_bat_status[index]:-unknown}"
+  # Where this cell actually sits, before anything about its condition: on a
+  # multi-battery machine the charge level is what differs between the two,
+  # and reporting only full-charge capacity left it invisible.
+  if ((full > 0)); then
+    charge="$percent%"
+    if ((energy_now > 0)); then
+      charge+=" · $(format_energy "$energy_now") / $(format_energy "$full")"
+    else
+      charge+=" · $(format_energy "$full") capacity"
+    fi
+  else
+    charge="charge unavailable"
+  fi
+  detail="$charge · $health · ${view_bat_status[index]:-unknown}"
   case ${view_bat_status[index]} in
   Discharging) detail+=" · draw $(format_power $((power / 1000)))" ;;
   Charging) detail+=" · charging at $(format_power $((power / 1000)))" ;;

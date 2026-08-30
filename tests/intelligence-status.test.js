@@ -117,6 +117,52 @@ describe("per-battery reporting", () => {
     });
   });
 
+  test("shows where each battery actually sits, not just its capacity", () => {
+    // Given two cells at very different charge levels
+    // When the report is rendered
+    // Then each states its own level, because on a multi-battery machine that
+    // is precisely what differs between them
+    withStatus((f) => {
+      installBattery(f.root, BAT0, {
+        status: "Discharging",
+        energy_now: 6000000,
+        capacity: 50,
+        power_now: 5800000,
+      });
+      installBattery(f.root, BAT1, {
+        status: "Not charging",
+        energy_now: 1400000,
+        capacity: 5,
+      });
+      writeState(f.state);
+
+      const result = status(f);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /50% · 6\.0 Wh \/ 12\.1 Wh · health 50% · Discharging/);
+      assert.match(result.stdout, /5% · 1\.4 Wh \/ 26\.0 Wh · health 52% · Not charging/);
+    });
+  });
+
+  test("falls back to capacity when a battery reports no current energy", () => {
+    withStatus((f) => {
+      installBattery(f.root, BAT1, { status: "Discharging", capacity: 40 });
+      writeState(f.state);
+      assert.match(status(f).stdout, /40% · 26\.0 Wh capacity · health 52%/);
+    });
+  });
+
+  test("says so when a battery reports no capacity at all", () => {
+    withStatus((f) => {
+      installBattery(f.root, BAT1, {
+        status: "Discharging",
+        energy_full: 0,
+        energy_full_design: 0,
+      });
+      writeState(f.state);
+      assert.match(status(f).stdout, /charge unavailable · health N\/A/);
+    });
+  });
+
   test("reports a model per battery, from that battery's own evidence", () => {
     withStatus((f) => {
       installBattery(f.root, BAT0, {

@@ -34,7 +34,13 @@ Fields are conditional; absent information is not printed as a misleading zero.
 | Field              | When shown                                  | Meaning                                                                                      |
 | ------------------ | ------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `Services`         | Always                                      | `healthy`, or individual tracker/monitor states                                              |
-| `BAT*` directory name | One line for each present battery        | Health against design capacity, full-charge energy, and the live power flow while current moves |
+| `BAT*` directory name | One block for each present battery       | Opens with the cell's identity: vendor, model, and serial                                       |
+| `Battery`          | Inside each battery block                   | That cell's current charge and energy, its health against design capacity, its sysfs status, and the live power flow while current moves |
+| `Model`            | Inside each battery block                   | That cell's own lifecycle state and evidence counts; a projection is built only from the battery's own windows |
+| `Typical draw`     | Battery has a usable model                  | Its learned draw, and the estimator chosen for it when that is not the default                  |
+| `From this level` / `At full` / `Range` | Battery has a usable model | That cell's own projection                                                                      |
+| `Current sample`   | Battery is discharging with a window open   | Progress of the window being measured, reported against the battery it measures                 |
+| `Not installed`    | Evidence exists for an absent battery       | Names it; this is the only place such evidence appears, and it is never modelled                |
 | `Battery`          | No present battery                          | Runtime state is suppressed because persisted data may be stale                              |
 | `Power`            | State exists                                | On battery, charging, full, held, or generically plugged; includes observed session duration |
 | `Energy`           | State exists                                | Current aggregate energy / current full usable capacity and derived percentage               |
