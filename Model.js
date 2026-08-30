@@ -138,6 +138,7 @@ function parseView(raw) {
       model: String(battery.model || ""),
       vendor: String(battery.vendor || ""),
       endThreshold: viewNumber(battery.end_threshold_percent),
+      held: battery.held === true,
     };
   }
   return view;
@@ -176,10 +177,26 @@ function batteryFraction(device) {
     : 0;
 }
 
-function chargeThresholdActive(device, fraction, onBattery, states) {
+// The view is definitive about a threshold hold: it compares each battery
+// against its own configured cap. UPower exposes no equivalent field, so the
+// heuristic below is only a fallback for when the view cannot be trusted.
+//
+// The bar stays visible while the panel is closed, and the view is only
+// re-read while the panel is open, so a stale document must not outrank
+// UPower's live state. The view's own AC reading is the staleness check:
+// plugging or unplugging is exactly what invalidates it, and within a single
+// power state a hold does not appear or vanish abruptly.
+function viewThresholdAuthoritative(view, onBattery) {
+  return !!(view && view.available && view.acOnline === !onBattery);
+}
+
+function chargeThresholdActive(device, fraction, onBattery, states, view) {
   var d = device || {};
   var s = states || {};
   if (!(d && d.isPresent && !onBattery)) return false;
+  if (viewThresholdAuthoritative(view, onBattery)) {
+    return view.powerPhase === "held";
+  }
 
   if (d.state === s.Discharging) return false;
   if (d.state === s.PendingCharge) return true;
@@ -191,14 +208,14 @@ function chargeThresholdActive(device, fraction, onBattery, states) {
   );
 }
 
-function batteryIcon(device, fraction, onBattery, states) {
+function batteryIcon(device, fraction, onBattery, states, view) {
   var d = device || {};
   if (!d.isPresent) return "";
 
   var chargingIcons = ["󰢜", "󰂆", "󰂇", "󰂈", "󰢝", "󰂉", "󰢞", "󰂊", "󰂋", "󰂅"];
   var defaultIcons = ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"];
   var index = Math.max(0, Math.min(9, Math.floor(fraction * 10)));
-  var threshold = chargeThresholdActive(d, fraction, onBattery, states);
+  var threshold = chargeThresholdActive(d, fraction, onBattery, states, view);
 
   if (threshold) return defaultIcons[index];
   if (d.state === states.FullyCharged) return "󰂅";
@@ -206,11 +223,12 @@ function batteryIcon(device, fraction, onBattery, states) {
   return defaultIcons[index];
 }
 
-function modeLabel(device, fraction, onBattery, states) {
+function modeLabel(device, fraction, onBattery, states, view) {
   var d = device || {};
   if (!d.isPresent) return "";
 
-  if (chargeThresholdActive(d, fraction, onBattery, states)) return "Threshold";
+  if (chargeThresholdActive(d, fraction, onBattery, states, view))
+    return "Threshold";
   if (onBattery) return "On battery";
   if (!onBattery && fraction >= 1) return "Fully charged";
   return "Charging";
@@ -236,16 +254,12 @@ function deviceStateIcon(device, states) {
   return "󰁹";
 }
 
-// sysfs reports a battery parked at its charge-stop threshold as "Not
-// charging". UPower has no equivalent field, so this is the sysfs counterpart
-// of chargeThresholdActive() rather than a duplicate of it.
+// Whether one battery is parked at its own configured charge cap. The rule
+// itself lives in battery_model_threshold_held(); the view applies it per
+// battery and ships the answer, so this reads the seam rather than deriving
+// it a second time from the raw status string and threshold.
 function sysfsThresholdActive(extra) {
-  var e = extra || {};
-  return (
-    e.status === "Not charging" &&
-    Number(e.endThreshold) > 0 &&
-    Number(e.percentage) >= Number(e.endThreshold)
-  );
+  return !!(extra && extra.held);
 }
 
 // Severity token for one battery's state icon. Panel.qml maps these onto theme
@@ -405,6 +419,7 @@ if (typeof module === "object" && module !== null) {
     deviceStateString: deviceStateString,
     deviceStateIcon: deviceStateIcon,
     sysfsThresholdActive: sysfsThresholdActive,
+    viewThresholdAuthoritative: viewThresholdAuthoritative,
     deviceStateSeverity: deviceStateSeverity,
     deviceBatteryIcon: deviceBatteryIcon,
     getLaptopBatteries: getLaptopBatteries,

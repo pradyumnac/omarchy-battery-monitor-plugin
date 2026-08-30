@@ -88,6 +88,7 @@ view_bat_cycle_count=()
 view_bat_model=()
 view_bat_vendor=()
 view_bat_end_threshold=()
+view_bat_held=()          # parked at its own configured charge cap
 
 # --- Helpers ---------------------------------------------------------------
 
@@ -225,6 +226,12 @@ battery_view_collect_batteries() {
     view_bat_model+=("$model")
     view_bat_vendor+=("$vendor")
     view_bat_end_threshold+=("$threshold")
+    if battery_model_threshold_held "$status" "$capacity" "$threshold"; then
+      view_bat_held+=(1)
+      ((held += 1))
+    else
+      view_bat_held+=(0)
+    fi
 
     view_energy_now_uwh=$((view_energy_now_uwh + energy))
     view_energy_capacity_uwh=$((view_energy_capacity_uwh + full))
@@ -237,7 +244,6 @@ battery_view_collect_batteries() {
     case $status in
     Charging) ((charging += 1)) ;;
     Full) ((full_count += 1)) ;;
-    "Not charging") ((held += 1)) ;;
     esac
   done
 
@@ -378,7 +384,7 @@ battery_view_json_bool() {
 
 battery_view_json_batteries() {
   local -n _bv_bat_out=$1
-  local index separator="" name status cycles model vendor
+  local index separator="" name status cycles model vendor held
   _bv_bat_out=""
   for ((index = 0; index < ${#view_bat_name[@]}; index++)); do
     battery_view_json_string name "${view_bat_name[index]}"
@@ -386,7 +392,8 @@ battery_view_json_batteries() {
     battery_view_json_string cycles "${view_bat_cycle_count[index]}"
     battery_view_json_string model "${view_bat_model[index]}"
     battery_view_json_string vendor "${view_bat_vendor[index]}"
-    printf -v _bv_bat_out '%s%s\n    {"name": %s, "status": %s, "percent": %s, "energy_now_uwh": %s, "energy_full_uwh": %s, "energy_full_design_uwh": %s, "power_now_uw": %s, "cycle_count": %s, "model": %s, "vendor": %s, "end_threshold_percent": %s}' \
+    battery_view_json_bool held "${view_bat_held[index]}"
+    printf -v _bv_bat_out '%s%s\n    {"name": %s, "status": %s, "percent": %s, "energy_now_uwh": %s, "energy_full_uwh": %s, "energy_full_design_uwh": %s, "power_now_uw": %s, "cycle_count": %s, "model": %s, "vendor": %s, "end_threshold_percent": %s, "held": %s}' \
       "$_bv_bat_out" "$separator" "$name" "$status" \
       "${view_bat_percent[index]}" \
       "${view_bat_energy_now_uwh[index]}" \
@@ -394,7 +401,7 @@ battery_view_json_batteries() {
       "${view_bat_energy_design_uwh[index]}" \
       "${view_bat_power_now_uw[index]}" \
       "$cycles" "$model" "$vendor" \
-      "${view_bat_end_threshold[index]}"
+      "${view_bat_end_threshold[index]}" "$held"
     separator=","
   done
   [[ -n $separator ]] && _bv_bat_out+=$'\n  '

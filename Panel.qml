@@ -89,12 +89,12 @@ Panel {
 
   function batteryIcon() {
     var device = UPower.displayDevice
-    return Model.batteryIcon(device, root.batteryFraction, root.discharging, upowerStates())
+    return Model.batteryIcon(device, root.batteryFraction, root.discharging, upowerStates(), root.view)
   }
 
   function modeLabel() {
     var device = UPower.displayDevice
-    return Model.modeLabel(device, root.batteryFraction, root.discharging, upowerStates())
+    return Model.modeLabel(device, root.batteryFraction, root.discharging, upowerStates(), root.view)
   }
 
   function profileIcon(name) {
@@ -111,7 +111,7 @@ Panel {
   }
   readonly property bool chargeThresholdActive: {
     var device = UPower.displayDevice
-    return Model.chargeThresholdActive(device, root.batteryFraction, root.discharging, upowerStates())
+    return Model.chargeThresholdActive(device, root.batteryFraction, root.discharging, upowerStates(), root.view)
   }
   readonly property bool batteryFull: fullyCharged || (!root.discharging && batteryFraction >= 1)
   readonly property bool batteryFlowIdle: batteryFull || chargeThresholdActive

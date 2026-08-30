@@ -163,16 +163,63 @@ test("formats a usual full-runtime estimate", () => {
   assert.equal(Model.formatRuntimeEstimate("invalid"), "");
 });
 
-test("sysfs threshold hold needs a reached stop threshold", () => {
-  const held = { status: "Not charging", endThreshold: 80, percentage: 80 };
-  assert.equal(Model.sysfsThresholdActive(held), true);
-  assert.equal(Model.sysfsThresholdActive({ ...held, percentage: 60 }), false);
-  assert.equal(Model.sysfsThresholdActive({ ...held, endThreshold: 0 }), false);
+test("a threshold hold is read from the view, not re-derived", () => {
+  // battery_model_threshold_held() decides this once, in the view. The panel
+  // reads the answer; it must not reach past it to the raw status string.
+  assert.equal(Model.sysfsThresholdActive({ held: true }), true);
+  assert.equal(Model.sysfsThresholdActive({ held: false }), false);
+  assert.equal(Model.sysfsThresholdActive(undefined), false);
+  // A battery whose raw fields look like a hold but that the view did not
+  // label as one stays not-held: the seam is the authority.
   assert.equal(
-    Model.sysfsThresholdActive({ ...held, status: "Discharging" }),
+    Model.sysfsThresholdActive({
+      status: "Not charging",
+      endThreshold: 80,
+      percentage: 80,
+    }),
     false,
   );
-  assert.equal(Model.sysfsThresholdActive(undefined), false);
+});
+
+test("the view outranks the UPower heuristic when it is fresh", () => {
+  const states = { Charging: 1, Discharging: 2, FullyCharged: 3, PendingCharge: 4 };
+  // UPower reports pending-charge, which the fallback heuristic alone calls a
+  // threshold hold. A fresh view that says the pack is merely plugged wins.
+  const device = { isPresent: true, state: states.PendingCharge };
+  const plugged = Model.parseView(
+    JSON.stringify({
+      schema: "battery-view",
+      version: 1,
+      power: { phase: "plugged", ac_online: true },
+    }),
+  );
+  const heldView = Model.parseView(
+    JSON.stringify({
+      schema: "battery-view",
+      version: 1,
+      power: { phase: "held", ac_online: true },
+    }),
+  );
+  assert.equal(Model.chargeThresholdActive(device, 0.7, false, states, plugged), false);
+  assert.equal(Model.chargeThresholdActive(device, 0.7, false, states, heldView), true);
+  // No view at all falls back to the UPower heuristic.
+  assert.equal(Model.chargeThresholdActive(device, 0.7, false, states, null), true);
+});
+
+test("a view from the other power state is stale and does not outrank UPower", () => {
+  const states = { Charging: 1, Discharging: 2, FullyCharged: 3, PendingCharge: 4 };
+  const device = { isPresent: true, state: states.PendingCharge };
+  // Read while unplugged, now consulted while plugged in: the AC reading
+  // disagrees with UPower's live state, so the document is stale.
+  const stale = Model.parseView(
+    JSON.stringify({
+      schema: "battery-view",
+      version: 1,
+      power: { phase: "discharging", ac_online: false },
+    }),
+  );
+  assert.equal(Model.viewThresholdAuthoritative(stale, false), false);
+  assert.equal(Model.chargeThresholdActive(device, 0.7, false, states, stale), true);
 });
 
 test("state icon severity ranks charge level above threshold and full", () => {
@@ -182,7 +229,7 @@ test("state icon severity ranks charge level above threshold and full", () => {
     FullyCharged: 3,
     Empty: 6,
   };
-  const held = { status: "Not charging", endThreshold: 80, percentage: 80 };
+  const held = { held: true, endThreshold: 80, percentage: 80 };
   function severity(device, extra) {
     return Model.deviceStateSeverity(device, extra, states);
   }

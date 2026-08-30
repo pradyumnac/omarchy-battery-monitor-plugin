@@ -171,13 +171,10 @@ format_session_minutes() {
   fi
 }
 
-# sysfs reports both "genuinely capped at a configured limit" and "not this
-# battery's turn yet" (dual-battery sequential charging) as the same
-# status=="Not charging" string, with no further detail. A raw status match
-# alone cannot tell those apart, so only claim "held at threshold" when the
-# battery's own percentage has actually reached its own configured cap;
-# everything else that is merely not charging is reported plainly instead of
-# with a false threshold claim.
+# Only claim "held at threshold" when battery_model_threshold_held() agrees;
+# everything else that is merely not charging is reported plainly rather than
+# with a false threshold claim. The rule lives in battery-model.sh so this
+# notification, the view's pack phase, and the panel cannot disagree.
 send_charge_notification() {
   local battery_dir name status capacity threshold detail
   local description charging_block held_block idle_block
@@ -198,8 +195,7 @@ send_charge_notification() {
     if [[ $status == "Charging" ]]; then
       charging_parts+=("$detail")
     elif [[ $status == "Not charging" ]]; then
-      if is_nonnegative_integer "$capacity" && is_nonnegative_integer "$threshold" &&
-        ((threshold > 0 && capacity >= threshold)); then
+      if battery_model_threshold_held "$status" "$capacity" "$threshold"; then
         held_parts+=("$detail")
       else
         idle_parts+=("$detail")

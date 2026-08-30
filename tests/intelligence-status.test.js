@@ -91,6 +91,7 @@ function writeBatteries(stateDir, batteries, { acOnline = false } = {}) {
       energy_full_design: spec.energyFullDesign,
       power_now: spec.powerNow,
       capacity: spec.percent,
+      charge_control_end_threshold: spec.endThreshold,
     };
     Object.entries(optional).forEach(([file, value]) => {
       if (value !== undefined) {
@@ -289,13 +290,34 @@ test("reports a charge-threshold hold", () => {
     writeHistory(stateDir);
     writeDefaultBattery(
       stateDir,
-      { status: "Not charging" },
+      { status: "Not charging", percent: 90, endThreshold: 90 },
       { acOnline: true },
     );
 
     const result = runStatus(stateDir);
     assert.match(result.stdout, /Power: plugged in · charge held/);
     assert.match(result.stdout, /If unplugged now: 3h 48m/);
+  });
+});
+
+test("does not call an idle battery held when it is below its own cap", () => {
+  withFixture("status-not-held", (stateDir) => {
+    writeState(stateDir, {
+      previous_state: "on-charge",
+      window_start_epoch: 0,
+    });
+    writeHistory(stateDir);
+    // Sequential dual-battery charging: "Not charging" at 70% against a 90%
+    // cap is waiting its turn, not a threshold hold.
+    writeDefaultBattery(
+      stateDir,
+      { status: "Not charging", percent: 70, endThreshold: 90 },
+      { acOnline: true },
+    );
+
+    const result = runStatus(stateDir);
+    assert.match(result.stdout, /Power: plugged in/);
+    assert.doesNotMatch(result.stdout, /charge held/);
   });
 });
 

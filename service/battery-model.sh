@@ -273,6 +273,26 @@ battery_model_window_complete() {
   ((elapsed_seconds >= BATTERY_MODEL_WINDOW_SECONDS))
 }
 
+# --- Charge-threshold holds ------------------------------------------------
+
+# Is this battery genuinely parked at a configured charge cap?
+#
+# sysfs reports two different situations with the identical status string
+# "Not charging": a battery held at its configured charge-stop threshold, and a
+# battery in a multi-battery pack that is simply not its turn to charge yet. A
+# status match alone cannot tell them apart, so a hold is only claimed once the
+# battery's own percentage has actually reached its own configured cap.
+#
+# This is the single owner of that rule. The view labels each battery and the
+# pack phase with it, and the tracker's plug notification uses the same call —
+# before it lived here, each of those had its own answer and they disagreed.
+battery_model_threshold_held() {
+  local status=$1 percent=$2 threshold=$3
+  [[ $status == "Not charging" ]] || return 1
+  [[ $percent =~ ^[0-9]+$ && $threshold =~ ^[0-9]+$ ]] || return 1
+  ((threshold > 0 && percent >= threshold))
+}
+
 # Is this draw physically believable for a laptop battery?
 battery_model_draw_plausible() {
   local draw_mw=$1

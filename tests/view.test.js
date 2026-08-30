@@ -137,6 +137,54 @@ describe("the aggregated view document", () => {
     });
   });
 
+  test("claims a threshold hold only when a battery reached its own cap", () => {
+    withViewFixture((f) => {
+      // Sequential dual-battery charging: the idle one reports the same bare
+      // "Not charging" string a genuinely capped battery would, far below its
+      // configured cap. It must not be reported as held, and it must not drag
+      // the whole pack's phase to "held" either.
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        status: "Not charging",
+        capacity: 70,
+        charge_control_end_threshold: 90,
+      });
+      writeBattery(f.root, "BAT1", {
+        present: 1,
+        status: "Not charging",
+        capacity: 60,
+        charge_control_end_threshold: 90,
+      });
+      writeMains(f.root, 1);
+
+      let document = runView(f);
+      assert.equal(document.batteries[0].held, false);
+      assert.equal(document.batteries[1].held, false);
+      assert.equal(document.power.phase, "plugged");
+
+      // Once BAT0 actually reaches its cap, both the battery and the pack say so.
+      writeBattery(f.root, "BAT0", { capacity: 95 });
+      document = runView(f);
+      assert.equal(document.batteries[0].held, true);
+      assert.equal(document.batteries[1].held, false);
+      assert.equal(document.power.phase, "held");
+    });
+  });
+
+  test("a battery with no configured cap is never held", () => {
+    withViewFixture((f) => {
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        status: "Not charging",
+        capacity: 100,
+      });
+      writeMains(f.root, 1);
+      const document = runView(f);
+      assert.equal(document.batteries[0].held, false);
+      assert.equal(document.power.phase, "plugged");
+    });
+  });
+
   test("skips batteries the kernel reports as not present", () => {
     withViewFixture((f) => {
       writeBattery(f.root, "BAT0", { present: 0, status: "Unknown" });
@@ -434,7 +482,11 @@ describe("session and freshness in the view", () => {
       assert.equal(runView(f).power.phase, "charging");
       assert.equal(runView(f).power.ac_online, true);
 
-      writeBattery(f.root, "BAT0", { status: "Not charging" });
+      writeBattery(f.root, "BAT0", {
+        status: "Not charging",
+        capacity: 90,
+        charge_control_end_threshold: 90,
+      });
       assert.equal(runView(f).power.phase, "held");
     });
   });

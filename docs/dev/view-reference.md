@@ -105,9 +105,16 @@ model has nothing to say.
 
 `batteries` is one object per present battery: `name`, `status`, `percent`,
 `energy_now_uwh`, `energy_full_uwh`, `energy_full_design_uwh`, `power_now_uw`,
-`cycle_count`, `model`, `vendor`, `end_threshold_percent`. `name` is the sysfs
-directory name, which is what UPower reports as `nativePath`, so a consumer can
-join the two without a lookup table.
+`cycle_count`, `model`, `vendor`, `end_threshold_percent`, `held`. `name` is
+the sysfs directory name, which is what UPower reports as `nativePath`, so a
+consumer can join the two without a lookup table.
+
+`held` is the answer to "is this battery parked at its own configured charge
+cap". Read it; do not re-derive it. sysfs reports both a genuine hold and "not
+this battery's turn to charge yet" with the identical `status` string
+`"Not charging"`, so a status match alone gets it wrong on any multi-battery
+machine. `battery_model_threshold_held()` owns the rule, the view applies it
+per battery, and `power.phase` becomes `held` only when some battery really is.
 
 `profiles` carries `available` and `active` for a power-profile picker.
 `system.uptime_seconds` is the machine's uptime.
