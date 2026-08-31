@@ -2,8 +2,9 @@ const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 const { withFixture } = require("./support/fixture");
+const { reextractScript } = require("./support/battery");
 
 const tracker = path.join(
   __dirname,
@@ -348,6 +349,65 @@ describe("incremental extraction after a poll", () => {
       const bat0 = rows.find((row) => row.key === KEY_BAT0);
       assert.equal(bat0.openEpoch, 1000);
       assert.equal(bat0.openEnergy, 50000000);
+    });
+  });
+
+  test("agrees with a full re-extraction across one long discharge session", () => {
+    // extract_battery() feeds the extractor a bounded tail. The extractor
+    // is stateless: its first row seeds both the session id and the window
+    // anchor. Once a discharge run outgrows the tail, that anchor slides
+    // forward every poll instead of staying fixed at the run's real start -
+    // one false window and one false session per poll. Six polls (the other
+    // tests in this file) never reach that tail bound; this run needs to.
+    withBatteryFixture((f) => {
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        status: "Discharging",
+        energy_now: 50000000,
+        energy_full: 50000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
+      });
+      let energy = 50000000;
+      let timestamp = 1000;
+      for (let poll = 0; poll < 30; poll += 1) {
+        writeBattery(f.root, "BAT0", { energy_now: energy });
+        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
+        energy -= 30000;
+        timestamp += 180;
+      }
+
+      const windows = windowsFile(f.state);
+      const sessionEpochs = new Set(windows.map((row) => row.split("\t")[1]));
+      assert.equal(
+        sessionEpochs.size,
+        1,
+        "one continuous discharge run must produce one session id",
+      );
+      // 30 polls * 180s = 5220s of run time; a window closes every 900s,
+      // so a correctly anchored extractor closes floor(5220/900) = 5 of
+      // them, not one per poll.
+      assert.equal(windows.length, 5);
+
+      const result = spawnSync(reextractScript, [], {
+        env: {
+          ...process.env,
+          BATTERY_SESSION_STATE_DIR: f.state,
+          // battery-state.tsv's last column is a wall-clock "last rescored
+          // at" stamp, not derived from raw - it legitimately differs
+          // between the incremental run above and this batch run unless
+          // both are pinned to the same value.
+          BATTERY_REEXTRACT_NOW: String(timestamp - 180),
+        },
+        encoding: "utf8",
+      });
+      assert.equal(
+        result.status,
+        0,
+        `incremental and batch extraction disagree:\n${result.stdout}`,
+      );
+      assert.match(result.stdout, /No difference/);
     });
   });
 });

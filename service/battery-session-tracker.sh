@@ -138,6 +138,33 @@ raw_latest_file() {
   [[ -n "$name" ]] && printf '%s' "$dir/$name"
 }
 
+# Every raw observation since the last row that reset battery_extract_windows()'s
+# own run state - any non-Discharging row. From that row on, incremental
+# output is identical to a full re-extraction, because it is the same point
+# the stateless extractor would itself have reset at; feeding it less risks
+# cutting mid-run and feeding it a false start. Spans the two most recent
+# dated raw files, not just the newest, so a run that crosses local midnight
+# is not cut at the file boundary either. Returns nothing (not an error) for
+# a battery with no raw history yet.
+raw_recent_rows() {
+  local battery_dir=$1 dir names name
+  dir="$raw_root/$(battery_raw_dir_name "$(capture_one_battery_key "$battery_dir")")"
+  [[ -d "$dir" ]] || return 0
+  names=$(find "$dir" -maxdepth 1 -name '*.tsv' -printf '%f\n' 2>/dev/null | sort | tail -n 2)
+  [[ -n "$names" ]] || return 0
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && cat -- "$dir/$name"
+  done <<<"$names" | grep -v '^#' | awk -F '\t' '
+    { rows[NR] = $0 }
+    $4 != "Discharging" { cut = NR }
+    END {
+      start = cut + 1
+      if (start < 1) start = 1
+      for (i = start; i <= NR; i++) print rows[i]
+    }
+  '
+}
+
 # Append one raw row for one battery. Called every poll, for every present
 # battery, unconditionally — the poll row is the liveness proof. Rotation is
 # implicit: the local date is the filename, so a new day needs no logic here.
@@ -182,12 +209,10 @@ append_raw_row() {
 # raw file, then append only what has not already been recorded — the same
 # extraction function `make reextract` runs over the whole file (ADR-0001).
 extract_battery() {
-  local battery_dir=$1 key file windows_seen tmp_gaps tmp_open
+  local battery_dir=$1 key windows_seen tmp_gaps tmp_open
   local last_window_epoch=0 last_gap_epoch=0
 
   key=$(capture_one_battery_key "$battery_dir")
-  file=$(raw_latest_file "$battery_dir") || return 0
-  [[ -n "$file" ]] || return 0
 
   [[ -f "$state_dir/windows.tsv" ]] &&
     last_window_epoch=$(awk -F '\t' -v k="$key" '$3==k{e=$1} END{print e+0}' "$state_dir/windows.tsv")
@@ -199,7 +224,7 @@ extract_battery() {
   : >"$tmp_gaps"
 
   windows_seen=$(
-    tail -n 20 -- "$file" 2>/dev/null |
+    raw_recent_rows "$battery_dir" |
       battery_extract_windows "$key" "$tmp_gaps" "$tmp_open"
   )
 
