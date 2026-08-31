@@ -43,6 +43,21 @@ make reextract
 The command rebuilds tiers 2 and 3 and diffs them against the live files. A
 clean diff proves the paths agree. Run it after you change extraction logic.
 
+The comparison ignores two fields of `battery-state.tsv`, because both differ
+on every run and neither is derived from raw:
+
+| Ignored | Reason |
+| --- | --- |
+| `updated_epoch` | A wall-clock stamp taken when the row is written |
+| Row order | One row per battery, and no reader depends on the order |
+
+Every other column is compared. `tests/tracker.test.js` holds this from both
+sides: a changed stamp and a reversed order must still report no difference,
+and a changed estimator must still fail.
+
+`--force` writes the file whole. The rule above applies to the comparison
+only.
+
 ## Manual check before a release
 
 Run these on real hardware. The automated suite cannot prove them.

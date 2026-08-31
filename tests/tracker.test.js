@@ -4,7 +4,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync, spawnSync } = require("node:child_process");
 const { withFixture } = require("./support/fixture");
-const { reextractScript } = require("./support/battery");
+const {
+  reextractScript,
+  writeRawDay,
+  rawPollRun,
+} = require("./support/battery");
 
 const tracker = path.join(
   __dirname,
@@ -390,16 +394,12 @@ describe("incremental extraction after a poll", () => {
       // them, not one per poll.
       assert.equal(windows.length, 5);
 
+      // No clock pinning. battery-state.tsv's wall-clock stamp and its row
+      // order both differ between the incremental and the batch run by
+      // construction, and the comparison excludes them, so the real run
+      // agrees without help.
       const result = spawnSync(reextractScript, [], {
-        env: {
-          ...process.env,
-          BATTERY_SESSION_STATE_DIR: f.state,
-          // battery-state.tsv's last column is a wall-clock "last rescored
-          // at" stamp, not derived from raw - it legitimately differs
-          // between the incremental run above and this batch run unless
-          // both are pinned to the same value.
-          BATTERY_REEXTRACT_NOW: String(timestamp - 180),
-        },
+        env: { ...process.env, BATTERY_SESSION_STATE_DIR: f.state },
         encoding: "utf8",
       });
       assert.equal(
@@ -409,6 +409,82 @@ describe("incremental extraction after a poll", () => {
       );
       assert.match(result.stdout, /No difference/);
     });
+  });
+});
+
+describe("what the re-extraction comparison ignores", () => {
+  // Comparing battery-state.tsv byte for byte reported a difference on every
+  // single run: its last column is a wall-clock stamp, and the two paths emit
+  // batteries in different orders. A check that always fails is a check
+  // nobody reads, so the noise had to go without taking the signal with it.
+  // These tests hold that line from both sides.
+
+  function reextract(stateDir, args = []) {
+    return spawnSync(reextractScript, args, {
+      env: { ...process.env, BATTERY_SESSION_STATE_DIR: stateDir },
+      encoding: "utf8",
+    });
+  }
+
+  // Raw observations, then one `--force` pass, gives a state directory whose
+  // derived files agree with raw by construction. `mutate` then perturbs
+  // battery-state.tsv, and the assertion says whether that perturbation
+  // counts as a disagreement.
+  function withAgreeingState(mutate, assertion) {
+    withFixture({ state: "reextract-compare" }, (f) => {
+      writeRawDay(f.state, KEY_BAT1, rawPollRun(KEY_BAT1, { count: 30 }));
+      const seeded = reextract(f.state, ["--force"]);
+      assert.equal(seeded.status, 0, seeded.stderr);
+
+      const file = path.join(f.state, "battery-state.tsv");
+      const lines = fs.readFileSync(file, "utf8").trimEnd().split("\n");
+      fs.writeFileSync(file, mutate(lines).join("\n") + "\n");
+      assertion(reextract(f.state));
+    });
+  }
+
+  const agrees = (result) => {
+    assert.equal(result.status, 0, result.stdout);
+    assert.match(result.stdout, /No difference/);
+  };
+
+  test("a differing wall-clock stamp is not a disagreement", () => {
+    withAgreeingState(
+      (lines) =>
+        lines.map((line, index) => {
+          if (index === 0) return line;
+          const columns = line.split("\t");
+          columns[6] = "1"; // updated_epoch, far from any real run
+          return columns.join("\t");
+        }),
+      agrees,
+    );
+  });
+
+  test("a differing row order is not a disagreement", () => {
+    withAgreeingState(
+      (lines) => [lines[0], ...lines.slice(1).reverse()],
+      agrees,
+    );
+  });
+
+  test("a real drift in a derived column is still caught", () => {
+    // The whole point of the check. If excluding the stamp and the order
+    // also hid this, the check would be worthless.
+    withAgreeingState(
+      (lines) =>
+        lines.map((line, index) => {
+          if (index !== 1) return line;
+          const columns = line.split("\t");
+          columns[3] = "bogus-estimator";
+          return columns.join("\t");
+        }),
+      (result) => {
+        assert.equal(result.status, 1, "drift must fail the check");
+        assert.match(result.stdout, /battery-state\.tsv: differs/);
+        assert.match(result.stdout, /bogus-estimator/);
+      },
+    );
   });
 });
 

@@ -227,7 +227,7 @@ see [ADR-0001](../adr/0001-raw-observation-tier.md).
 | `make status` | Render the interpreted report. See [status output reference](status-output-reference.md) |
 | `make status VERBOSE=1` | Add the collection diagnostics |
 | `make view` | Print the exact document the panel reads |
-| `make reextract` | Rebuild tiers 2 and 3 from raw and diff. Changes nothing |
+| `make reextract` | Rebuild tiers 2 and 3 from raw and diff. Changes nothing. See [verify the extraction paths agree](testing.md#verify-the-extraction-paths-agree) |
 | `make reextract FORCE=1` | Rebuild tiers 2 and 3 and replace the live files |
 | `make export` | Bundle every tier and a manifest into one zip |
 | `make graph-charge` | Plot capacity over time, with power events, profile, and load |

@@ -103,6 +103,34 @@ done
   sort -t $'\t' -k2,2n -- "$work/gaps.tsv.body"
 } >"$work/gaps.tsv"
 
+# What the comparison must ignore, and why each is not a disagreement about
+# the data:
+#
+#   updated_epoch  A wall-clock stamp taken when the row is written. The live
+#                  file was stamped by the tracker and the regenerated one by
+#                  this run, so it differs on every run by construction.
+#   row order      This script emits one row per raw directory in iteration
+#                  order; the tracker emits them in its own. battery-state.tsv
+#                  holds one row per battery and no reader depends on their
+#                  order.
+#
+# Both differ on every single run, so comparing raw bytes made this check cry
+# wolf every time and masked the drift it exists to catch. Only
+# battery-state.tsv needs this: windows.tsv and gaps.tsv are already sorted
+# deterministically above and carry no wall-clock column.
+#
+# This normalizes the COMPARISON only. --force still writes the file whole.
+comparable() {
+  local name=$1 file=$2
+  case $name in
+  battery-state.tsv)
+    head -n 1 -- "$file"
+    tail -n +2 -- "$file" | cut -f1-6 | sort
+    ;;
+  *) cat -- "$file" ;;
+  esac
+}
+
 changed=0
 for name in windows.tsv gaps.tsv battery-state.tsv; do
   live="$state_dir/$name"
@@ -114,9 +142,12 @@ for name in windows.tsv gaps.tsv battery-state.tsv; do
     }
     continue
   fi
-  if ! diff -q "$live" "$fresh" >/dev/null 2>&1; then
+  comparable "$name" "$live" >"$work/.live.$name"
+  comparable "$name" "$fresh" >"$work/.fresh.$name"
+  if ! diff -q "$work/.live.$name" "$work/.fresh.$name" >/dev/null 2>&1; then
     printf '%s: differs from the live file\n' "$name"
-    diff -u "$live" "$fresh" | head -n 20
+    diff -u --label "$name (live)" --label "$name (regenerated)" \
+      "$work/.live.$name" "$work/.fresh.$name" | head -n 20
     changed=1
   fi
 done
