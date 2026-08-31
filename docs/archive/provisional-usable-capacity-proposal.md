@@ -1,10 +1,12 @@
-> **Superseded.** This proposal predates the per-battery model. Evidence is
-> now anchored to each battery's identity and projected from that cell's own
-> windows, which addresses the problem this described from a different
-> direction. Kept for the reasoning; see
-> [architecture](architecture.md#one-model-per-battery) and
-> [the research notes](../research/battery-runtime-modelling.md) for what
-> shipped.
+> **Superseded. Archived for the reasoning only. Do not treat it as current.**
+>
+> This proposal predates the per-battery model. Evidence is now anchored to
+> each battery's identity and projected from that cell's own windows. The
+> output shown below no longer matches `make status`.
+>
+> For what shipped, read
+> [architecture](../dev/architecture.md#one-model-per-battery) and
+> [the research notes](../research/battery-runtime-modelling.md).
 
 # Usable-capacity and runtime diagnostics
 
@@ -45,7 +47,7 @@ derive remaining runtime from current energy and full runtime, so a completed
 evidence gate never incorrectly reports `learning` during an upgrade.
 
 The full lifecycle and field precedence are defined in the
-[status output reference](status-output-reference.md).
+[status output reference](../dev/status-output-reference.md).
 
 ## Scope
 

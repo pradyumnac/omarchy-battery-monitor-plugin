@@ -17,11 +17,12 @@ flowchart TD
 ```
 
 `service/battery-model.sh` owns every rule the model depends on: the poll
-interval and its gap tolerance, the 15-minute window, the 30-day lookback, the
-180-day retention, the evidence gate, the plausibility bounds, and the
-projection formula. Each is written down exactly once, so the tracker, the view
-and the status report cannot drift apart — which they had, on the gate and on
-the median, when the rules existed twice.
+interval, the gap tolerance, the window length, the lookback, the evidence
+gate, the plausibility bounds, and the projection formula. Each rule is
+declared exactly once, so the tracker, the view, and the status report cannot
+drift apart. They had drifted before, on the gate and on the median, when the
+rules existed twice. [Constants](state-file-reference.md#constants) lists the
+values.
 
 `service/battery-view.sh` is the only thing that computes the view.
 `Panel.qml` reads it, `make status` sources it, and any future non-Omarchy
@@ -36,19 +37,19 @@ See the [view reference](view-reference.md) for the document itself.
 
 | Source | Drives | Frequency |
 | --- | --- | --- |
-| UPower events | Every notification | On mains connect/disconnect only |
-| Poll (`battery-session-tracker.timer`) | Sampling windows and session timing | Every 3 minutes |
+| UPower events | Every notification | On mains connect or disconnect only |
+| Poll (`battery-session-tracker.timer`) | Raw observations and session timing | `BATTERY_MODEL_POLL_INTERVAL_SECONDS` |
 | UPower D-Bus properties | The panel's live battery numbers | Pushed, no polling |
 
-The poll never sends a notification — it only advances the sampling window and
-refreshes the state file. A notification never lags.
+The poll never sends a notification. It appends raw observations and refreshes
+the state file. A notification never lags.
 
-The poll is deliberately far slower than the 15-minute window it feeds: nothing
-time-sensitive depends on it, because `battery-session-monitor.sh` already
-event-triggers on every real AC transition and the panel's live numbers come
-from UPower over D-Bus. `BATTERY_MODEL_POLL_INTERVAL_SECONDS` and the timer's
-`OnUnitActiveSec` are two halves of one number and must be changed together;
-the tracker's suspend/clock-gap tolerance is derived from it.
+The poll is deliberately slower than the window it feeds. Nothing
+time-sensitive depends on it: `battery-session-monitor.sh` event-triggers on
+every real AC transition, and the panel's live numbers come from UPower over
+D-Bus. `BATTERY_MODEL_POLL_INTERVAL_SECONDS` and the timer's `OnUnitActiveSec`
+are two halves of one number. Change them together. The gap tolerance derives
+from the same value.
 
 ## Plug flow
 
@@ -81,25 +82,19 @@ Unplug settles fast (0.22s-0.65s on a T480), so this path never waits.
 ## Session timing confidence
 
 Session timing is separate from battery intelligence. A real AC transition
-provides an exact `state_since`, and the panel shows a plain duration such as
-`5m`. When the transition itself was not observed, the tracker can only
-establish a lower bound and the panel shows `> 5m`, meaning **at least five
-minutes**.
+gives an exact `state_since`, and the panel shows a plain duration. When the
+tracker did not observe the transition, it can establish only a lower bound,
+and the panel prefixes the duration with `>`.
 
-| Tracker observation | Confidence | Panel |
-| --- | --- | --- |
-| Real AC/battery transition | Exact start | `X` |
-| First run while already plugged or unplugged | Lower bound from first observation | `> X` |
-| Same state after a polling gap over the tolerance or clock reversal | Lower bound from first post-gap observation | `> X` |
-| Existing state has no valid session timestamp | Lower bound from recovery observation | `> X` |
-| Next real transition after any lower-bound state | Exact start restored | `X` |
-
-The tracker persists this distinction in `state_since_at_least`; see the
-[state file reference](state-file-reference.md#session-duration-confidence).
+The tracker claims exactness only for a transition it saw. Every other path
+degrades to a lower bound rather than inventing a start time. The tracker
+persists the distinction in `state_since_at_least`. For the full matrix of
+observations and what each one stores, see
+[session-duration confidence](state-file-reference.md#session-duration-confidence).
 
 ## Raw observations, and one extractor
 
-[ADR-0001](adr/0001-raw-observation-tier.md) is the design record for this
+[ADR-0001](../adr/0001-raw-observation-tier.md) is the design record for this
 section; this is the summary a contributor changing the tracker actually
 needs.
 
@@ -153,12 +148,12 @@ Retention is a read-time interpretation, not a write-time row cap: nothing in
 `windows.tsv` is ever pruned, so a heavily used cell can never evict the
 evidence of one swapped in only occasionally by filling a shared cap.
 
-The view calculates from the most recent 30 days. A battery needs 12 windows
-across 3 discharge sessions to be `ready`, and 4 to offer a `provisional`
-estimate with an explicit low-confidence label rather than showing a new user
-nothing for days. Alongside the point estimate it reports a p25–p75 band from
-the same sorted draws — a heavier draw buys less time, so the p75 draw sets the
-low edge.
+The view reads windows inside the lookback only. A battery reaches `ready` at
+the full evidence gate and `provisional` at the smaller one, so a new user sees
+a labelled rough answer instead of nothing for days. Beside the point estimate
+the view reports a p25–p75 band from the same sorted draws. A heavier draw buys
+less time, so the p75 draw sets the low edge. See
+[Constants](state-file-reference.md#constants).
 
 ### The estimator each battery uses
 
@@ -168,15 +163,14 @@ tracker scores them against that battery's own held-out windows whenever it
 records one, and writes the winner to that battery's row in
 `battery-state.tsv`; every reader looks the answer up.
 
-The cost is deliberately placed on the 15-minute window-append path rather than
-the panel refresh, which reads the view every five seconds while open. Scoring
-is far too expensive to repeat there, and the answer cannot change without a
-new window.
+The cost sits on the window-append path, not on the panel refresh. The panel
+re-reads the view while it is open. Scoring is too expensive to repeat there,
+and the answer cannot change until a new window arrives.
 
-The median is the incumbent and keeps the job unless a challenger beats it by a
-clear margin. Scores drift window to window, so without a margin the choice
-would flap between estimators separated by noise — and a projection that
-silently changes shape is harder to trust than one consistently a little worse.
+The default estimator keeps the job unless a challenger beats it by a clear
+margin. Scores drift from window to window. Without a margin the choice would
+flap between estimators separated by noise, and a projection that changes shape
+without cause is harder to trust than one that is consistently a little worse.
 
 ### Nothing ships on plausibility
 
@@ -201,7 +195,7 @@ shell.
 
 | Script | Runs | Job |
 | --- | --- | --- |
-| `battery-session-tracker.sh` | Every 3 minutes, and once per power event | Reads sysfs, advances the sampling window, updates the state file. Notifies only when called with `--power-event`. |
+| `battery-session-tracker.sh` | Each poll interval, and once per power event | Reads sysfs, appends raw observations, updates the state file. Notifies only when called with `--power-event`. |
 | `battery-session-monitor.sh` | Continuously, as a systemd service | Watches `upower --monitor`, decides when a transition is real, calls the tracker with `--power-event`. |
 
 Only `battery-session-monitor.sh` passes `--power-event`. A notification
@@ -234,7 +228,7 @@ field contract.
 
 Suspend and shutdown gaps are handled now — see
 [gap classification](#raw-observations-and-one-extractor) above and
-[ADR-0001](adr/0001-raw-observation-tier.md). What is left is genuinely open,
+[ADR-0001](../adr/0001-raw-observation-tier.md). What is left is genuinely open,
 not just undocumented:
 
 - **A mains change that happens entirely within a gap.** If the machine is
@@ -247,4 +241,4 @@ not just undocumented:
   The panel's full desktop-mode fallback after the final runtime removal still
   needs real-hardware verification.
 
-See [requirements spec](requirements-spec.md) for tracking.
+See [backlog](backlog.md) for tracking.

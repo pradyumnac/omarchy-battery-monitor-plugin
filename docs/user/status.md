@@ -1,7 +1,10 @@
 # Check battery and model health
 
+Audience: anyone running the plugin.
+
 Use this guide when the panel looks wrong, `≈ Usual` is missing, or you want to
-know whether battery intelligence is still learning.
+know whether the model is still learning. For why the model behaves this way,
+read [how the battery model works](concepts.md).
 
 ## Run the concise report
 
@@ -50,28 +53,11 @@ vendor, model, and serial. Everything under it belongs to that battery alone.
 - `Current sample` appears only on the battery actually discharging, because
   that is the one being measured.
 
-`Pack remaining` below is the sum of the per-battery figures. These batteries
-discharge one after another rather than together, so adding them is what the
-pack actually gives you.
+`Pack remaining` below is the sum of the per-battery figures. See
+[why the pack figure is a sum](concepts.md#why-the-pack-figure-is-a-sum).
 
 The block name is the sysfs directory name, so a laptop with other battery
 names shows those names.
-
-## Why each battery is modelled separately
-
-A cell's runtime depends on its own capacity, age, and discharge curve. Mixing
-a worn battery's measurements with a healthy one produces a number describing
-neither. So every window of evidence is anchored to the battery that recorded
-it — by vendor, model, and serial, not by capacity, which drifts with wear.
-
-Two consequences worth knowing:
-
-- **Swapping a battery does not corrupt the model.** The new cell starts
-  gathering its own evidence; the old cell's windows stay on file and are named
-  under `Not installed`, but never feed a projection.
-- **A rarely used battery learns slowly.** On a machine that discharges its
-  cells in sequence, the second battery only gathers evidence once the first is
-  empty, so it can sit at `learning` for a long time. That is expected.
 
 ## Understand `Typical draw`
 
@@ -79,28 +65,6 @@ The estimator named beside the draw is the one currently measuring best for
 that battery, chosen by scoring candidates against its own held-out windows.
 When no candidate clearly beats the default, none is named. Run `make backtest`
 to see the scores behind the choice.
-
-## Read physical-battery state icons
-
-These icons are drawn in the **panel**, not in `make status`. Each physical
-battery has one state icon in its card. The glyph shows the
-battery state. The icon colour shows that battery's charge level.
-
-| Condition | Glyph | Colour |
-| --- | --- | --- |
-| State is unknown, missing, or unsupported | Exclamation | Charge-level colour, or the theme foreground when the percentage is missing |
-| Charging | Lightning | Charge-level colour |
-| Discharging | Down arrow | Charge-level colour |
-| Charge threshold holds the battery | Battery | Orange |
-| Fully charged without a threshold hold | Battery | Green |
-| Empty | Battery | Red |
-| Any other known state | Battery | Charge-level colour |
-
-The colour order is: empty or less than 10% is red; 10% through 19% is yellow;
-a threshold hold is orange; full charge is green; all other levels use the
-theme foreground colour. Red and the foreground colour follow the active
-Omarchy theme. A threshold hold takes priority over full charge. Each battery
-uses its own state, percentage, and threshold status.
 
 ## Follow the lifecycle state
 
@@ -134,9 +98,7 @@ It reaches `ready` at 12 accepted 15-minute windows from 3 discharge sessions.
 ```
 
 `From this level` is the typical answer for that battery. `Range` says how
-wrong it could be: half of that battery's recorded windows fall inside it. A
-heavier draw buys less time, so the low edge comes from the heavier quarter of
-its windows.
+wrong it can be. See [why the estimate has a range](concepts.md#why-the-estimate-has-a-range).
 
 ### While charging
 
@@ -164,9 +126,8 @@ recently restarted:
 Sampling: restarted · machine was suspended
 ```
 
-This does not discard earlier valid history — the interrupted window is kept
-on file, just never counted as evidence. The reason is a fact about what
-actually happened to the machine, not a guess:
+The interrupted window stays on file and never counts as evidence. Earlier
+valid history is untouched. The reason names what happened to the machine:
 
 | Reason | Meaning |
 | --- | --- |
@@ -176,10 +137,9 @@ actually happened to the machine, not a guess:
 | `the system clock changed` | The clock jumped backward beyond ordinary drift |
 
 Each battery reports its own most recent interruption, inside its own block.
-If two batteries were interrupted by the same machine-wide event (a suspend
-affects every battery at once), both blocks show it — deliberately not
-collapsed into one pack-level line, because each battery's evidence is
-tracked independently.
+A suspend affects every battery at once, so both blocks can show the same
+reason. The report does not collapse them, because each battery's evidence is
+tracked on its own.
 
 ## Respond to warnings
 

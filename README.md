@@ -64,17 +64,27 @@ steps.
 
 ## Learn more
 
+**Using the plugin**
+
 | Doc | For |
 | --- | --- |
-| [docs/user/install.md](docs/user/install.md) | Install, uninstall, troubleshooting |
-| [docs/user/notifications.md](docs/user/notifications.md) | What the panel and each notification mean |
-| [docs/user/status.md](docs/user/status.md) | How to check battery/model health and respond to warnings |
-| [docs/dev/architecture.md](docs/dev/architecture.md) | Why the tracker, model, and monitor work this way |
-| [docs/dev/status-output-reference.md](docs/dev/status-output-reference.md) | Status fields and lifecycle-state contract |
-| [docs/dev/view-reference.md](docs/dev/view-reference.md) | The aggregated view: the contract every consumer reads |
-| [docs/dev/state-file-reference.md](docs/dev/state-file-reference.md) | Persisted state, history schema, and selected estimators |
-| [docs/research/battery-runtime-modelling.md](docs/research/battery-runtime-modelling.md) | Why the model is what it is, and the open questions |
-| [docs/dev/requirements-spec.md](docs/dev/requirements-spec.md) | Test coverage, manual QA checklist, backlog |
+| [install.md](docs/user/install.md) | Install, uninstall, troubleshooting |
+| [status.md](docs/user/status.md) | Check battery and model health, respond to warnings |
+| [notifications.md](docs/user/notifications.md) | What the panel and each notification mean |
+| [concepts.md](docs/user/concepts.md) | Why the model answers the way it does |
+
+**Changing the plugin**
+
+| Doc | For |
+| --- | --- |
+| [architecture.md](docs/dev/architecture.md) | How the tracker, model, and monitor fit together |
+| [view-reference.md](docs/dev/view-reference.md) | The aggregated view every consumer reads |
+| [state-file-reference.md](docs/dev/state-file-reference.md) | The four data tiers, their formats, and the constants |
+| [status-output-reference.md](docs/dev/status-output-reference.md) | Every `make status` field and lifecycle state |
+| [testing.md](docs/dev/testing.md) | What the suites cover, and the manual release checks |
+| [backlog.md](docs/dev/backlog.md) | Pending work |
+| [docs/adr/](docs/adr/INDEX.md) | Decision records. Start with ADR-0001 |
+| [research/](docs/research/battery-runtime-modelling.md) | Why the model is what it is, and the open questions |
 
 ## Repo map
 
@@ -84,9 +94,11 @@ steps.
 | `service/` | The tracker, the monitor, the model rules, the aggregated view, and their systemd units — installed and run long-term |
 | `scripts/` | `install`/`uninstall`/`preflight`, plus `status`/`backtest`/`export`/`reextract` — one-shot, run by `make` |
 | `tests/` | Node test suite (`make test`) |
-| `docs/user/` | Goal-oriented user guides and user-facing explanations |
-| `docs/dev/` | Contributor explanations, reference, and verification specs |
+| `docs/user/` | How-to guides and user-facing explanation |
+| `docs/dev/` | Contributor explanation and reference |
+| `docs/adr/` | Decision records. One file per decision, never deleted |
 | `docs/research/` | Background research, not implementation decisions |
+| `docs/archive/` | Superseded documents, kept for their reasoning only |
 
 ## Constraints
 

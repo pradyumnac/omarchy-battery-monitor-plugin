@@ -1,5 +1,7 @@
 # Install and uninstall
 
+Audience: anyone installing the plugin.
+
 ## Requirements
 
 - Omarchy with Quickshell

@@ -6,7 +6,7 @@ export PLUGIN_DIR
 
 # Syntax and lint checks only. Run `make test` separately for the test suite.
 check:
-	bash -n service/battery-session-tracker.sh service/battery-session-monitor.sh service/power-supply.sh service/battery-model.sh service/battery-view.sh scripts/battery-session-preflight.sh scripts/install-session-tracker.sh scripts/uninstall-session-tracker.sh scripts/plugin-files.sh scripts/battery-intelligence-status.sh scripts/battery-backtest.sh scripts/battery-export.sh scripts/battery-reextract.sh
+	bash -n service/battery-session-tracker.sh service/battery-session-monitor.sh service/power-supply.sh service/battery-model.sh service/battery-view.sh scripts/battery-session-preflight.sh scripts/install-session-tracker.sh scripts/uninstall-session-tracker.sh scripts/plugin-files.sh scripts/battery-intelligence-status.sh scripts/battery-backtest.sh scripts/battery-export.sh scripts/battery-reextract.sh scripts/check-doc-links.sh
 	# Service executables exist only after `make install`; verify the static timer here.
 	systemd-analyze verify service/battery-session-tracker.timer
 	# The flags below are Qt6-only, so prefer the Qt6 binary explicitly —
@@ -27,6 +27,7 @@ check:
 		echo "qmllint not installed; skipping QML validation"; \
 	fi
 	node --check Model.js
+	scripts/check-doc-links.sh
 	git diff --check
 
 test:

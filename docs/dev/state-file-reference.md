@@ -2,7 +2,7 @@
 
 Audience: contributors reading or writing tracker-collected data.
 
-Since [ADR-0001](adr/0001-raw-observation-tier.md), this data spans four
+Since [ADR-0001](../adr/0001-raw-observation-tier.md), this data spans four
 files with different jobs. `state` is the one thing that is not a cache;
 everything else is derived from raw observations and can be rebuilt with
 `make reextract`.
@@ -26,18 +26,13 @@ feed.
 
 ## `state`: session bookkeeping
 
-`state_schema_version` names the format. Version 2 removed the derived model
-fields version 1 carried (`battery_energy_now_uwh`,
-`battery_usable_capacity_uwh`, `usual_remaining_runtime_seconds`,
-`usual_full_runtime_seconds`, `usual_sample_count`, and — as of ADR-0001 —
-`discharge_session_id`, `window_start_epoch`, `window_start_energy_uwh`,
-`last_sample_energy_uwh`, `window_reset_reason`). Every one of those is now
-derived from `raw/` and `battery-state.tsv` on every read rather than kept as
-a second, staler copy on disk.
+This file holds session bookkeeping only. It holds no derived model value,
+because the view recomputes each one from `raw/` and `battery-state.tsv` on
+every read. A second, staler copy on disk can only disagree with the first.
 
-A version-1 file carries no `state_schema_version` key and still reads
-without complaint: every field the view needs from `state` exists in both
-versions.
+`state_schema_version` names the format. A version-1 file carries no such key
+and still reads without complaint. The view ignores the extra fields a version-1
+file carries. No migration step is needed.
 
 ### Fields
 
@@ -52,14 +47,12 @@ versions.
 | `last_observed` | Time of the last successful poll | Detects a clock reversal or a gap over `BATTERY_MODEL_MAX_POLL_GAP_SECONDS` |
 | `charge_start_levels` | Per-battery percentage at charge start | Produces one start-to-end row per battery on unplug |
 | `charge_session_valid` | Whether continuity and the start snapshot are reliable | Gates the exact-vs-qualified duration line; see below |
-| `battery_fingerprint` | Names and measurement mode of present batteries | Informational (`make status VERBOSE=1`); carries no reset logic — see [ADR-0001](adr/0001-raw-observation-tier.md) |
+| `battery_fingerprint` | Names and measurement mode of present batteries | Informational (`make status VERBOSE=1`); carries no reset logic — see [ADR-0001](../adr/0001-raw-observation-tier.md) |
 
-Sampling-window state (what used to be `discharge_session_id`/
-`window_start_epoch`/`window_reset_reason`) is no longer here at all. It
-lives per battery in `battery-state.tsv`, because a battery swap is now
-handled by writing to a different `raw/` directory rather than by resetting
-a field in this file — see
-[Alternatives considered in ADR-0001](adr/0001-raw-observation-tier.md#alternatives-considered).
+Sampling-window state is not in this file. It lives per battery in
+`battery-state.tsv`. A battery swap writes to a different `raw/` directory
+instead of resetting a field here. See
+[ADR-0001](../adr/0001-raw-observation-tier.md#alternatives-considered).
 
 ### Session-duration confidence
 
@@ -93,10 +86,11 @@ are independent now:
 
 ## Tier 1 — `raw/<battery-key>/<date>.tsv`
 
-One directory per battery, named after its identity key with `/` and NUL
-replaced by `-` (the only characters the filesystem actually forbids — this
-is not a privacy boundary, see Guarantees below). One file per local date,
-append-only, never edited or pruned.
+One directory per battery, named after its identity key. Only `/` and NUL are
+replaced, with `-`, because those are the only characters the filesystem
+forbids. This is not a privacy boundary. See
+[Properties of these files](#properties-of-these-files). One file per local
+date, append-only, never edited or pruned.
 
 ```text
 # battery-raw-observations<TAB>v0.1.0
@@ -128,16 +122,16 @@ rotation logic. Nothing is ever pruned.
 
 Both derived from tier 1 by `battery_extract_windows()` — the same function
 called incrementally after every poll and by `make reextract` in batch. See
-[the extraction algorithm in ADR-0001](adr/0001-raw-observation-tier.md#decision).
+[the extraction algorithm in ADR-0001](../adr/0001-raw-observation-tier.md#decision).
 
 ```text
 # battery-windows<TAB>v0.1.0
 <epoch><TAB><session_epoch><TAB><battery-key><TAB><draw_mw><TAB><energy_now_uwh><TAB><energy_full_uwh><TAB><energy_full_design_uwh><TAB><voltage_now_uv><TAB><power_now_uw><TAB><capacity_percent><TAB><cycle_count><TAB><eligible>
 ```
 
-`session_epoch` groups windows from one continuous discharge run — a run
-spanning several completed 15-minute windows is one session for the evidence
-gate, not several. `eligible` is `0` for a window that spanned an
+`session_epoch` groups windows from one continuous discharge run. A run that
+spans several completed windows counts as one session for the evidence gate,
+not several. `eligible` is `0` for a window that spanned an
 interruption; such a window is retained for reconstruction but never counts
 as evidence.
 
@@ -151,109 +145,92 @@ as evidence.
 machine was awake but the tracker was not running), or `clock` (a backward
 time jump beyond ordinary NTP jitter).
 
-### What identity is, and is not, used for
+### Which windows the model reads
 
-Draw is a property of the machine and its workload — the laptop pulls the
-same watts whichever cell supplies them — so **every window still feeds the
-draw model**, whichever battery measured it. What genuinely is
-battery-specific is how much runtime a reported charge level actually buys,
-because a worn cell's `energy_full` is exactly the number that stops being
-true. Identity anchors that, keeps the evidence auditable, and is what
-attributes each window to the right `raw/` directory in the first place.
+The model reads a window only when the window is `eligible`, is not
+future-dated, and falls inside `BATTERY_MODEL_LOOKBACK_SECONDS`. It needs
+`BATTERY_MODEL_MIN_WINDOWS` windows across `BATTERY_MODEL_MIN_SESSIONS`
+sessions for a full estimate, and `BATTERY_MODEL_PROVISIONAL_WINDOWS` for a
+provisional one. See [Constants](#constants).
 
-The model uses only windows from the most recent 30 days that are not
-future-dated and are `eligible`, requires at least 12 windows across 3
-sessions for a full estimate (4 windows for a provisional one), and uses
-their median draw by default (or whichever estimator currently scores best —
-see below). Retention is a read-time interpretation now, not a write-time row
-cap: nothing in `windows.tsv` is ever pruned.
+For why evidence is anchored per battery, see
+[one model per battery](architecture.md#one-model-per-battery).
 
 ## Tier 3 — `battery-state.tsv`
 
-One row per battery, rewritten whole each time the tracker records a window
-for it — at most once every 15 minutes, never on the poll that merely
-advances an open window.
+One row per battery. The tracker rewrites the whole file each time it records
+a window. It never rewrites the file on a poll that only advances an open
+window.
 
 ```text
 # battery-state<TAB>v0.1.0
 <battery-key><TAB><open_window_epoch><TAB><open_window_energy_uwh><TAB><estimator><TAB><scored><TAB><mean_error_mw><TAB><updated_epoch>
 ```
 
-This is what the view reads on its 5-second panel-refresh path — never
-`raw/`, never `windows.tsv` — so panel latency is unaffected by how much
-history has accumulated.
+The view reads this file on the panel refresh path. It reads neither `raw/`
+nor `windows.tsv` there, so panel latency does not grow with history.
 
-`median` is the incumbent and keeps the job unless a challenger beats it by
-`BATTERY_MODEL_ESTIMATOR_MARGIN_PERCENT` on that battery's own held-out
-windows. The margin exists because scores drift window to window: without it
-the selection would flap between estimators separated by noise, and a
-projection that silently changes shape is harder to trust than one that is
-consistently a little worse. Deleting this file costs nothing — every
-battery falls back to `median` and the next recorded window rebuilds it.
+`BATTERY_MODEL_DEFAULT_ESTIMATOR` keeps the job until a challenger beats it by
+`BATTERY_MODEL_ESTIMATOR_MARGIN_PERCENT` on that battery's held-out windows.
+See [the estimator each battery uses](architecture.md#the-estimator-each-battery-uses).
 
-## Guarantees
+Delete this file at no cost. Every battery falls back to the default
+estimator, and the next recorded window rebuilds the row.
 
-- Battery identity **is** recorded: each `raw/` directory and every
-  `windows.tsv`/`gaps.tsv`/`battery-state.tsv` row is keyed by manufacturer,
-  model, and serial. This is deliberate and replaces an earlier guarantee
-  that stored none of it.
+## Properties of these files
 
-  Serial is what separates two otherwise identical spare batteries, so
-  without it a user who swaps between spares cannot have their evidence
-  attributed correctly — and capacity is not a substitute, because it drifts
-  with wear and collides between different cells. Manufacturer and model are
-  what will let observations be pooled across machines with the same battery
-  later, which is the point of recording them in the clear rather than as a
-  digest.
+| Property | Applies to |
+| --- | --- |
+| Append-only. Never edited, never pruned | `raw/` |
+| Grows without bound. Retention applies at read time | `windows.tsv`, `gaps.tsv` |
+| Rewritten in place. Safe to delete and rebuild | `state`, `battery-state.tsv` |
+| Written atomically, through a temp file and a rename | All |
+| Created with `umask 077`, readable only by the owner | All |
 
-  The data stays in the user's own state directory and is never
-  transmitted. Anything that later shares it must ask first.
-- Nothing is ever pruned or rewritten: `raw/` is append-only, `windows.tsv`
-  and `gaps.tsv` grow without bound, and their retention is a read-time
-  interpretation. `state` and `battery-state.tsv` are the only files
-  rewritten in place, and both are safe to delete — the tracker rebuilds
-  what it needs from raw on the next poll.
-- Every write is atomic (temp file, then rename) and user-only (`umask
-  077`).
-- A gap longer than `BATTERY_MODEL_MAX_POLL_GAP_SECONDS` in the same
-  observed power state starts a lower-bound observed session; the panel
-  prefixes its duration with `>` rather than claiming to know what happened
-  while the service was inactive. See
-  [architecture](architecture.md#open-edge-cases) for suspend and shutdown
-  cases that can also hide a power-state change.
+Battery identity is recorded in the clear. Each `raw/` directory and every
+`windows.tsv`, `gaps.tsv`, and `battery-state.tsv` row carries manufacturer,
+model, and serial. The data stays in the user's state directory. Nothing
+transmits it. Anything that later shares it must ask first. For the reasoning,
+see [ADR-0001](../adr/0001-raw-observation-tier.md).
 
-## Inspecting it
+## Commands
 
-Use the combined, formatted report for normal diagnostics:
+| Command | Effect |
+| --- | --- |
+| `make status` | Render the interpreted report. See [status output reference](status-output-reference.md) |
+| `make status VERBOSE=1` | Add the collection diagnostics |
+| `make view` | Print the exact document the panel reads |
+| `make reextract` | Rebuild tiers 2 and 3 from raw and diff. Changes nothing |
+| `make reextract FORCE=1` | Rebuild tiers 2 and 3 and replace the live files |
+| `make export` | Bundle every tier and a manifest into one zip |
 
-```sh
-make status
-```
+## Constants
 
-The default report intentionally shows only interpreted battery and model
-facts. Use `make status VERBOSE=1` for collection diagnostics; see the
-[status output reference](status-output-reference.md). To see exactly what
-the panel reads:
+`service/battery-model.sh` declares every value below exactly once. This table
+is the only place the documentation repeats them. Cite the variable name
+elsewhere; never write the number.
 
-```sh
-make view
-```
+| Variable | Value | Governs |
+| --- | --- | --- |
+| `BATTERY_MODEL_POLL_INTERVAL_SECONDS` | 180 | How often the timer polls. The timer's `OnUnitActiveSec` must match |
+| `BATTERY_MODEL_MAX_POLL_GAP_SECONDS` | 3 × the poll interval | The gap tolerance that starts a lower-bound session |
+| `BATTERY_MODEL_WINDOW_SECONDS` | 900 | Length a window must reach before it records |
+| `BATTERY_MODEL_LOOKBACK_SECONDS` | 30 days | How far back the model reads windows |
+| `BATTERY_MODEL_MIN_WINDOWS` | 12 | Windows needed for `ready` |
+| `BATTERY_MODEL_MIN_SESSIONS` | 3 | Sessions needed for `ready` |
+| `BATTERY_MODEL_PROVISIONAL_WINDOWS` | 4 | Windows needed for `provisional` |
+| `BATTERY_MODEL_RECENT_WINDOWS` | 4 | Windows the recent-draw estimators read |
+| `BATTERY_MODEL_ESTIMATOR_MARGIN_PERCENT` | 15 | How far a challenger must beat the incumbent |
+| `BATTERY_MODEL_ESTIMATOR_MIN_SCORED` | 8 | Scored windows needed before selection runs |
+| `BATTERY_MODEL_DEFAULT_ESTIMATOR` | `median` | The incumbent estimator |
+| `BATTERY_MODEL_MIN_DRAW_MW` | 100 | Lower plausibility bound |
+| `BATTERY_MODEL_MAX_DRAW_MW` | 120000 | Upper plausibility bound |
 
-To rebuild `windows.tsv`, `gaps.tsv`, and `battery-state.tsv` from raw and
-confirm the incremental and batch extraction paths still agree:
+Format versions are separate. `BATTERY_RAW_FORMAT`, `BATTERY_WINDOWS_FORMAT`,
+`BATTERY_GAPS_FORMAT`, and `BATTERY_STATE_TIER_FORMAT` are each `v0.1.0` and
+describe how to parse a file. `BATTERY_RECORDING_RULES_VERSION` is `v0.1.0`
+and records which recording rules were in force. `BATTERY_STATE_SCHEMA_VERSION`
+is `2` and describes the `state` file.
 
-```sh
-make reextract          # diffs against the live files, changes nothing
-make reextract FORCE=1  # replaces them
-```
-
-To bundle everything — raw, windows, gaps, battery-state, and a manifest —
-into one zip for a notebook:
-
-```sh
-make export
-```
-
-Every rule that shapes these files is written down once, in
-`service/battery-model.sh`: the poll interval and gap tolerance, the window
-length, the lookback, the evidence gate, and the plausibility bounds.
+Retention is not a constant. The model reads the lookback window at read time.
+No file is pruned.

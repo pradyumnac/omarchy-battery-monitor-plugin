@@ -4,9 +4,9 @@ Thanks for helping improve T480 Omarchy Battery Monitor.
 
 ## Before opening a change
 
-1. Check [docs/dev/requirements-spec.md](docs/dev/requirements-spec.md) for
-   open backlog and explain the user problem. Issues aren't used for
-   tracking — that file is the source of pending work.
+1. Check [docs/dev/backlog.md](docs/dev/backlog.md) for open work and explain
+   the user problem. Issues are not used for tracking; that file is the source
+   of pending work.
 2. Keep changes focused and portable across laptops.
 3. Follow the constraints in [README.md](README.md#constraints) —
    user-level paths only, no root, nothing host-identifying committed to Git.
@@ -16,9 +16,12 @@ Thanks for helping improve T480 Omarchy Battery Monitor.
 ## Local checks
 
 ```sh
-make check   # syntax, unit files, qmllint, JS parse
+make check   # syntax, unit files, qmllint, JS parse, doc links
 make test    # the Node suite
 ```
+
+See [docs/dev/testing.md](docs/dev/testing.md) for what each suite covers and
+the manual checks before a release.
 
 Three rules carry most of the weight here:
 
@@ -26,10 +29,9 @@ Three rules carry most of the weight here:
   window arithmetic, the projection, the threshold rule, and the scoring each
   exist exactly once. A second copy is free to disagree with the first, which
   is how several shipped bugs happened.
-- **Consumers read the aggregated view, never the internals.** If the panel or
-  a report needs a field, add it to `service/battery-view.sh`; do not reach
-  past it to sysfs, `raw/`, or `windows.tsv` directly. See
-  [the view reference](docs/dev/view-reference.md).
+- **Consumers read the aggregated view, never the internals.** Add a field to
+  `service/battery-view.sh` rather than reaching past it. See
+  [the view reference](docs/dev/view-reference.md#the-rule).
 - **Raw observations are the only source of truth.** `windows.tsv`,
   `gaps.tsv`, and `battery-state.tsv` are regenerable from `raw/` by one
   extraction function, called both incrementally (per poll) and in batch
@@ -53,9 +55,14 @@ Keep documentation in its Diataxis mode: user goal steps are how-to guides,
 design rationale is explanation, and field/state contracts are reference. Link
 between them rather than duplicating content.
 
-If your change affects the panel layout or a notification's title/body, update
-the matching screenshot — see the screenshot backlog in `HANDOFF.md`
-(untracked; ask the maintainer if you don't have it).
+If your change affects the panel layout or a notification's title or body,
+update the matching screenshot in `screenshots/`. See
+[docs/dev/testing.md](docs/dev/testing.md#screenshots).
+
+## Credit
+
+Add your name or GitHub handle to [CONTRIBUTORS.md](CONTRIBUTORS.md) when you
+make a meaningful contribution.
 
 ## Pull requests
 

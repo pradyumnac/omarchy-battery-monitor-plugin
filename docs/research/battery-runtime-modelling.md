@@ -1,7 +1,11 @@
 # Battery runtime modelling approaches
 
+Audience: contributors who evaluate a change to the runtime model.
+
 Status: background research only. This document does not authorize a model
-change.
+change. A decision that ships belongs in an
+[ADR](../adr/INDEX.md); this file holds the evidence and the open questions
+behind one.
 
 ## Problem definition
 
@@ -62,14 +66,18 @@ the 30-day window.
 
 #### Current data usage
 
-The history schema captures four values, but not every value is a predictor:
+Since [ADR-0001](../adr/0001-raw-observation-tier.md) the raw tier keeps every
+poll, and `windows.tsv` keeps a full column set for each window. The model still
+reads only a few of those columns:
 
-| Captured value       | Current use                                              | Not currently extracted                                              |
-| -------------------- | -------------------------------------------------------- | -------------------------------------------------------------------- |
-| Window epoch         | 30-day model cutoff and 180-day pruning                  | Recency weighting, time-of-day patterns, trend                       |
-| Session ID           | Requires three distinct sessions                         | Per-session weighting or per-session model                           |
-| Draw in mW           | Median expected draw; the model's sole learned predictor | Variability/confidence interval, trend, workload bands               |
-| Full capacity in µWh | Recent median in `make status`                           | Runtime prediction; that uses the current live full-capacity reading |
+| Captured value | Current use | Not currently extracted |
+| --- | --- | --- |
+| Window epoch | Lookback cutoff | Recency weighting, time-of-day patterns, trend |
+| Session epoch | Requires distinct sessions for the gate | Per-session weighting or per-session model |
+| Draw in mW | Expected draw; the model's sole learned predictor | Variability, trend, workload bands |
+| Energy, capacity, voltage, cycle count | Reported in `make status` | Runtime prediction; that uses the live reading |
+| Gap cause and eligibility | Excludes an interrupted window | Modelling what a suspend or reboot costs |
+| Raw per-poll rows | Rebuilding tiers 2 and 3 | Sub-window dynamics, settle behaviour, curve shape |
 
 Current stored energy is captured in tracker state and is the numerator of the
 panel's remaining-runtime estimate. Current full usable capacity is the
@@ -77,16 +85,14 @@ numerator of the peak-runtime diagnostic. Continuity timestamps, battery
 fingerprint, and previous energy samples validate or reset collection; they do
 not tune expected draw.
 
-Consequently, the system uses all history columns operationally, but it does not
-use all of the information latent in them. In particular, a session with many
+The system therefore records far more than it models. A session with many
 windows has more influence than a short session, capacity movement is not
 modelled as a trend, and draw dispersion is not exposed as uncertainty.
 
-The present schema also cannot support honest prediction-error training because
-it does not record a ground-truth active time-to-threshold outcome. It does not
-record power profile, exact accepted-window duration, or rejection reasons
-either. Those omissions are privacy-friendly, but they limit regression and
-model evaluation.
+Two gaps remain for honest prediction-error training. The data does not record
+a ground-truth time-to-threshold outcome, and it does not record the power
+profile in force. The raw tier now makes the first one reachable, because every
+poll is retained and an outcome can be reconstructed after the fact.
 
 ### 4. Exponential smoothing of estimates
 
@@ -149,7 +155,7 @@ These are evaluation candidates, not implementation decisions:
 
 | Candidate                    | Inputs                                 | Strength                          | Main risk                      |
 | ---------------------------- | -------------------------------------- | --------------------------------- | ------------------------------ |
-| Current median               | Valid 15-minute draw windows           | Robust and explainable            | Slow/context-blind             |
+| Current median               | Valid draw windows                     | Robust and explainable            | Slow/context-blind             |
 | Rolling median               | Last N valid windows                   | Adapts without regression         | Abrupt window boundary         |
 | Trimmed mean                 | Recent draws minus tails               | Uses more information than median | Trim fraction tuning           |
 | EMA of draw                  | Current draw plus previous estimate    | Small state, gradual adaptation   | Lag and decay tuning           |
@@ -250,8 +256,7 @@ selection it would make, so the report and the running model cannot tell
 different stories — both call `battery_model_score_draws()`.
 
 The three requirements this needed were met as follows. Cost is kept off the
-refresh path by scoring at window-append time, at most once every 15 minutes,
-rather than on every panel read. The choice is recorded per battery with the
+refresh path by scoring at window-append time rather than on every panel read. The choice is recorded per battery with the
 held-out error that earned it, and `make status` prints both. Flapping is
 prevented by `BATTERY_MODEL_ESTIMATOR_MARGIN_PERCENT`: `median` keeps the job
 unless a challenger beats it by a clear margin.
@@ -261,5 +266,5 @@ judgement, not measurement. Once real multi-week histories exist, check how
 often the selection changes and whether the margin is doing useful work or
 merely freezing an early accident.
 
-`make export` writes the same history as CSV for exploring these questions in a
+`make export` bundles the same evidence for exploring these questions in a
 notebook before any of it is committed to shell.

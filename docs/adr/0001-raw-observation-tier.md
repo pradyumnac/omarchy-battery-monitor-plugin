@@ -1,5 +1,7 @@
 # 0001 — Raw-observation tier, single extractor, and per-battery gap tracking
 
+Audience: contributors who change the tracker's write path or its data files.
+
 ## Status
 
 accepted

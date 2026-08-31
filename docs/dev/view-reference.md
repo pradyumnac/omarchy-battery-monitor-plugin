@@ -95,7 +95,7 @@ has nothing to say.
 | --- | --- |
 | `history.state` | `ready`, `missing`, or `unsupported` |
 | `history.total` / `recent` / `archived` / `future` | Row counts from `windows.tsv`; `future` rows are retained for diagnosis but are never evidence |
-| `history.ineligible` | Windows that spanned a gap (see [ADR-0001](adr/0001-raw-observation-tier.md)) — retained for reconstruction, never counted as evidence |
+| `history.ineligible` | Windows that spanned a gap (see [ADR-0001](../adr/0001-raw-observation-tier.md)) — retained for reconstruction, never counted as evidence |
 | `sampling.fingerprint` | Names and measurement mode of the batteries installed now |
 | `sampling.pack_key` | Identity of the set installed now: `NAME:VENDOR:MODEL:SERIAL` per battery, comma separated in name order |
 | `sampling.pack_key_weak` | `true` when the firmware publishes no serial, so two identical spare batteries cannot be told apart. Say so rather than implying certainty |

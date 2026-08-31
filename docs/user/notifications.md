@@ -1,5 +1,7 @@
 # What the panel and notifications tell you
 
+Audience: anyone running the plugin.
+
 ![Panel detail: BAT0 and BAT1 side by side](../../screenshots/panel-detail.png)
 
 The bar shows one combined percentage. Open the panel for per-battery
@@ -17,15 +19,13 @@ Notifications never lag.
 decreases with charge level. It is intentionally different from `Left`, which
 reacts to the current workload and can move quickly.
 
-Each battery is modelled from its own discharge windows — a worn cell and a
-healthy one are never averaged together — and `≈ Usual` is the sum of those
-per-battery projections. These batteries discharge one after another rather
-than together, so adding them is what the pack actually gives you.
+Each battery is modelled from its own discharge windows, and `≈ Usual` adds
+those per-battery projections together. See
+[how the battery model works](concepts.md).
 
-The panel shows a single combined figure on purpose. To see what each battery
-contributes, and which one is still learning, run `make status`; see
-[check battery and model health](status.md) for learning, blocked, stale,
-charging, full, and charge-threshold states.
+The panel shows one combined figure on purpose. To see what each battery
+contributes, and which one is still learning, run `make status`. See
+[check battery and model health](status.md).
 
 ## Charger connected: `Plugged`
 
@@ -97,6 +97,27 @@ threshold) still gets a row — equal start and end values already say "no
 change." If the charge start itself was never observed, neither the
 duration line nor that battery's row appears.
 
+## Battery state icons
+
+Each battery has one state icon in its panel card. The glyph shows the battery
+state. The icon colour shows that battery's charge level.
+
+| Condition | Glyph | Colour |
+| --- | --- | --- |
+| State is unknown, missing, or unsupported | Exclamation | Charge-level colour, or the theme foreground when the percentage is missing |
+| Charging | Lightning | Charge-level colour |
+| Discharging | Down arrow | Charge-level colour |
+| Charge threshold holds the battery | Battery | Orange |
+| Fully charged without a threshold hold | Battery | Green |
+| Empty | Battery | Red |
+| Any other known state | Battery | Charge-level colour |
+
+The colour order is: empty or less than 10% is red; 10% through 19% is yellow;
+a threshold hold is orange; full charge is green; all other levels use the
+theme foreground colour. Red and the foreground colour follow the active
+Omarchy theme. A threshold hold takes priority over full charge. Each battery
+uses its own state, percentage, and threshold status.
+
 ## Rules that apply to every notification
 
 - One short title, one scannable fact per row.
@@ -127,11 +148,6 @@ already underway when tracking became reliable:
 | `5m` | The tracker observed the plug or unplug transition five minutes ago |
 | `> 5m` | **At least five minutes**; the actual session started earlier, but its transition time is unknown |
 
-The `>` form appears when the tracker first starts while already plugged or
-unplugged, resumes the same state after a polling gap beyond the tracker's
-tolerance or a clock reversal, or recovers an older state file with no session
-timestamp. It
-disappears after the next real plug or unplug transition.
-
-For the mechanics behind this — the state machine, timing, and state file —
-see [architecture](../dev/architecture.md).
+The `>` form appears when the tracker did not observe the transition itself.
+It disappears after the next real plug or unplug. See
+[why some durations start with `>`](concepts.md#why-some-durations-start-with-).
