@@ -14,15 +14,14 @@ const path = require("node:path");
 const { withFixture } = require("./support/fixture");
 const {
   modelEval,
-  writeHistory,
-  historyRow,
-  windowsFor,
-  writeEstimators,
+  writeWindows,
+  windowRow,
+  windowsForBattery,
+  writeBatteryState,
+  batteryStateRow,
   KEY_BAT0,
   KEY_BAT1,
   KEY_RETIRED,
-  HISTORY_HEADER_V1,
-  HISTORY_HEADER_V2,
 } = require("./support/battery");
 
 function evaluate(snippet) {
@@ -266,28 +265,33 @@ describe("discharge-window arithmetic", () => {
   });
 });
 
-describe("reading the history", () => {
-  function withHistory(rows, callback, header) {
-    return withFixture({ state: "model-history" }, (f) => {
-      writeHistory(f.state, rows, header);
-      return callback(path.join(f.state, "discharge-history.tsv"), f.state);
+describe("reading windows.tsv", () => {
+  function withWindowsFile(rows, callback, header) {
+    return withFixture({ state: "model-windows" }, (f) => {
+      writeWindows(f.state, rows, header);
+      return callback(path.join(f.state, "windows.tsv"), f.state);
     });
   }
 
-  test("recognises each schema it can read, and refuses the rest", () => {
-    withHistory([], (file) => {
-      assert.equal(evaluate(`battery_model_history_format ${file}`), "3");
+  test("recognises its own header, and refuses everything else", () => {
+    withWindowsFile([], (file) => {
+      const out = evaluate(`
+        battery_model_load_windows ${file} 20000000
+        echo "state=$battery_model_state"
+      `);
+      assert.match(out, /state=ready/);
     });
-    withHistory([], (file) => {
-      assert.equal(evaluate(`battery_model_history_format ${file}`), "2");
-    }, HISTORY_HEADER_V2);
-    withHistory([], (file) => {
-      assert.equal(evaluate(`battery_model_history_format ${file}`), "1");
-    }, HISTORY_HEADER_V1);
-    withHistory([], (file) => {
-      assert.equal(evaluate(`battery_model_history_format ${file}`), "0");
-    }, "# battery-discharge-history\tv99");
-    assert.equal(evaluate("battery_model_history_format /nonexistent"), "0");
+    withWindowsFile(
+      [],
+      (file) => {
+        const out = evaluate(`
+          battery_model_load_windows ${file} 20000000
+          echo "state=$battery_model_state"
+        `);
+        assert.match(out, /state=unsupported/);
+      },
+      "# battery-windows\tv99.0.0",
+    );
   });
 
   test("keeps one battery's evidence entirely separate from another's", () => {
@@ -295,14 +299,14 @@ describe("reading the history", () => {
     // When one battery is selected
     // Then only its own windows are visible, because a projection for a cell
     // must never be built from a different cell's measurements
-    withHistory(
+    withWindowsFile(
       [
-        ...windowsFor(KEY_BAT1, { count: 6, drawMw: 9000, start: 19990000 }),
-        ...windowsFor(KEY_BAT0, { count: 4, drawMw: 3000, start: 19991000 }),
+        ...windowsForBattery(KEY_BAT1, { count: 6, drawMw: 9000, start: 19990000 }),
+        ...windowsForBattery(KEY_BAT0, { count: 4, drawMw: 3000, start: 19981000 }),
       ],
       (file) => {
         const out = evaluate(`
-          battery_model_load_history ${file} 20000000
+          battery_model_load_windows ${file} 20000000
           battery_model_select_battery ${KEY_BAT1}
           echo "bat1 $battery_model_window_count $(battery_model_median battery_model_draws)"
           battery_model_select_battery ${KEY_BAT0}
@@ -315,13 +319,13 @@ describe("reading the history", () => {
   });
 
   test("reports a battery it has never seen as having no evidence", () => {
-    // Given a history with no windows for the requested battery
+    // Given a file with no windows for the requested battery
     // When it is selected
     // Then the working set is empty rather than carrying the previous
     // selection's numbers
-    withHistory(windowsFor(KEY_BAT1, { count: 6 }), (file) => {
+    withWindowsFile(windowsForBattery(KEY_BAT1, { count: 6 }), (file) => {
       const out = evaluate(`
-        battery_model_load_history ${file} 20000000
+        battery_model_load_windows ${file} 20000000
         battery_model_select_battery ${KEY_BAT1}
         battery_model_select_battery ${KEY_RETIRED}
         echo "windows=$battery_model_window_count sessions=$battery_model_session_count draws=\${#battery_model_draws[@]}"
@@ -331,11 +335,11 @@ describe("reading the history", () => {
   });
 
   test("counts distinct discharge sessions, not rows", () => {
-    withHistory(
-      windowsFor(KEY_BAT1, { count: 12, sessions: 3 }),
+    withWindowsFile(
+      windowsForBattery(KEY_BAT1, { count: 12, sessions: 3 }),
       (file) => {
         const out = evaluate(`
-          battery_model_load_history ${file} 20000000
+          battery_model_load_windows ${file} 20000000
           battery_model_select_battery ${KEY_BAT1}
           echo "windows=$battery_model_window_count sessions=$battery_model_session_count"
         `);
@@ -346,53 +350,56 @@ describe("reading the history", () => {
 
   test("ignores rows outside the lookback and rows from the future", () => {
     // Given evidence that is too old, current, and impossibly new
-    // When the history is read
+    // When the file is read
     // Then only the current evidence is modelled, and the rest is counted
-    withHistory(
+    withWindowsFile(
       [
-        historyRow({ epoch: 1000, key: KEY_BAT1, drawMw: 50000 }),
-        ...windowsFor(KEY_BAT1, { count: 5, drawMw: 9000, start: 19990000 }),
-        historyRow({ epoch: 20000100, key: KEY_BAT1, drawMw: 50000 }),
+        windowRow({ epoch: 1000, key: KEY_BAT1, drawMw: 50000 }),
+        ...windowsForBattery(KEY_BAT1, { count: 5, sessions: 1, drawMw: 9000, start: 19990000 }),
+        windowRow({ epoch: 20000100, key: KEY_BAT1, drawMw: 50000 }),
       ],
       (file) => {
         const out = evaluate(`
-          battery_model_load_history ${file} 20000000
+          battery_model_load_windows ${file} 20000000
           battery_model_select_battery ${KEY_BAT1}
-          echo "total=$battery_model_total_rows future=$battery_model_future_rows windows=$battery_model_window_count draw=$(battery_model_median battery_model_draws)"
+          echo "total=$battery_model_windows_total_rows future=$battery_model_windows_future_rows windows=$battery_model_window_count draw=$(battery_model_median battery_model_draws)"
         `);
         assert.match(out, /total=7 future=1 windows=5 draw=9000/);
       },
     );
   });
 
-  test("counts pack-level rows from older schemas as unusable", () => {
-    // Given a history written before evidence was recorded per battery
-    // When it is read
-    // Then those rows are reported but never attributed to a cell
-    withHistory(
-      ["19990000\ts0\t9000\t26000000", "19990001\ts0\t9100\t26000000"],
+  test("excludes windows an interruption made ineligible, but counts them", () => {
+    // A window marked eligible=0 was never real evidence (ADR-0001); it must
+    // be reported so a reader can see it exists, but never attributed to a
+    // battery's own draw evidence.
+    withWindowsFile(
+      [
+        ...windowsForBattery(KEY_BAT1, { count: 5, sessions: 1, drawMw: 9000, start: 19990000 }),
+        windowRow({ epoch: 19999000, key: KEY_BAT1, drawMw: 50000, eligible: 0 }),
+      ],
       (file) => {
         const out = evaluate(`
-          battery_model_load_history ${file} 20000000
-          echo "legacy=$battery_model_legacy_rows keys=\${#battery_model_keys[@]}"
+          battery_model_load_windows ${file} 20000000
+          battery_model_select_battery ${KEY_BAT1}
+          echo "ineligible=$battery_model_windows_ineligible_rows windows=$battery_model_window_count"
         `);
-        assert.match(out, /legacy=2 keys=0/);
+        assert.match(out, /ineligible=1 windows=5/);
       },
-      HISTORY_HEADER_V2,
     );
   });
 
-  test("treats an unreadable schema as having no model at all", () => {
-    withHistory(
+  test("treats an unrecognised header as having no model at all", () => {
+    withWindowsFile(
       [],
       (file) => {
         const out = evaluate(`
-          battery_model_load_history ${file} 20000000
+          battery_model_load_windows ${file} 20000000
           echo "state=$battery_model_state confidence=$(battery_model_confidence)"
         `);
         assert.match(out, /state=unsupported confidence=unavailable/);
       },
-      "# battery-discharge-history\tv99",
+      "# battery-windows\tv99.0.0",
     );
   });
 });
@@ -502,28 +509,41 @@ describe("estimator scoring", () => {
   });
 });
 
-describe("the estimator store", () => {
+describe("the battery-state tier (ADR-0001)", () => {
   test("uses each battery's recorded selection", () => {
-    withFixture({ state: "estimator-store" }, (f) => {
-      writeEstimators(f.state, [
-        { key: KEY_BAT1, estimator: "recent", meanError: 420 },
+    withFixture({ state: "tier3-store" }, (f) => {
+      writeBatteryState(f.state, [
+        batteryStateRow({ key: KEY_BAT1, estimator: "recent", error: 420 }),
       ]);
       const out = evaluate(`
-        battery_model_load_estimators ${path.join(f.state, "estimators.tsv")}
-        echo "chosen=$(battery_model_estimator_for ${KEY_BAT1}) error=\${battery_model_estimator_error[${KEY_BAT1}]}"
+        battery_model_load_tier3 ${path.join(f.state, "battery-state.tsv")} ${KEY_BAT1}
+        echo "chosen=$battery_model_tier3_estimator error=$battery_model_tier3_error"
       `);
       assert.match(out, /chosen=recent error=420/);
     });
   });
 
+  test("reports the still-open window's start and energy", () => {
+    withFixture({ state: "tier3-open" }, (f) => {
+      writeBatteryState(f.state, [
+        batteryStateRow({ key: KEY_BAT1, openEpoch: 19999550, openEnergy: 13000000 }),
+      ]);
+      const out = evaluate(`
+        battery_model_load_tier3 ${path.join(f.state, "battery-state.tsv")} ${KEY_BAT1}
+        echo "open=$battery_model_tier3_open_epoch energy=$battery_model_tier3_open_energy"
+      `);
+      assert.match(out, /open=19999550 energy=13000000/);
+    });
+  });
+
   test("falls back to the default for a battery never scored", () => {
-    withFixture({ state: "estimator-missing" }, (f) => {
-      writeEstimators(f.state, [{ key: KEY_BAT1, estimator: "recent" }]);
+    withFixture({ state: "tier3-missing" }, (f) => {
+      writeBatteryState(f.state, [batteryStateRow({ key: KEY_BAT1, estimator: "recent" })]);
       assert.equal(
         evaluate(`
-          battery_model_load_estimators ${path.join(f.state, "estimators.tsv")}
-          battery_model_estimator_for ${KEY_BAT0}
-        `),
+          battery_model_load_tier3 ${path.join(f.state, "battery-state.tsv")} ${KEY_BAT0}
+          echo "$battery_model_tier3_estimator"
+        `).trim(),
         "median",
       );
     });
@@ -531,24 +551,27 @@ describe("the estimator store", () => {
 
   test("ignores a store it does not recognise instead of trusting it", () => {
     // Given a store with an unknown header, or none at all
-    // When selections are loaded
+    // When it is loaded
     // Then every battery falls back to the default, because deleting or
     // corrupting this file must cost nothing but a rescore
-    withFixture({ state: "estimator-corrupt" }, (f) => {
-      writeEstimators(
+    withFixture({ state: "tier3-corrupt" }, (f) => {
+      writeBatteryState(
         f.state,
-        [{ key: KEY_BAT1, estimator: "recent" }],
-        "# battery-estimators\tv99",
+        [batteryStateRow({ key: KEY_BAT1, estimator: "recent" })],
+        "# battery-state\tv99.0.0",
       );
       assert.equal(
         evaluate(`
-          battery_model_load_estimators ${path.join(f.state, "estimators.tsv")}
-          battery_model_estimator_for ${KEY_BAT1}
-        `),
+          battery_model_load_tier3 ${path.join(f.state, "battery-state.tsv")} ${KEY_BAT1}
+          echo "$battery_model_tier3_estimator"
+        `).trim(),
         "median",
       );
       assert.equal(
-        evaluate("battery_model_load_estimators /nonexistent; battery_model_estimator_for x"),
+        evaluate(`
+          battery_model_load_tier3 /nonexistent x
+          echo "$battery_model_tier3_estimator"
+        `).trim(),
         "median",
       );
     });

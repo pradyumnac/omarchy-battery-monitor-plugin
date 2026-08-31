@@ -365,8 +365,12 @@ send_unplug_notification() {
   local have_start_levels=0
   ((${#start_names[@]} > 0)) && have_start_levels=1
 
-  if is_nonnegative_integer "$last_charge_start" && is_nonnegative_integer "$last_charge_end" &&
-    ((last_charge_end >= last_charge_start)); then
+  # 0 is the "never observed" sentinel for both timestamps, not a real epoch -
+  # is_nonnegative_integer alone accepts it, so it must be excluded explicitly
+  # or a charge session with no observed start reports a bogus few-minute
+  # duration computed from epoch zero.
+  if is_nonnegative_integer "$last_charge_start" && ((last_charge_start > 0)) &&
+    is_nonnegative_integer "$last_charge_end" && ((last_charge_end >= last_charge_start)); then
     duration=$(format_session_minutes "$((last_charge_end - last_charge_start))")
     if [[ $charge_session_valid == 1 ]]; then
       rows+=("Charged for ~$duration")

@@ -41,191 +41,160 @@ function writeBattery(root, name, values) {
   }
 }
 
-function writeHistory(state, rows) {
-  fs.writeFileSync(
-    path.join(state, "discharge-history.tsv"),
-    ["# battery-discharge-history\tv1", ...rows].join("\n") + "\n",
-  );
+// --- ADR-0001 helpers -------------------------------------------------
+//
+// The tracker no longer computes windows in-flight into a single history
+// file; it appends a raw observation per battery, per poll, and calls the
+// shared extractor on a bounded tail. Extraction itself (gap classification,
+// session grouping, the eligible flag) is unit tested directly in
+// extract.test.js against battery_extract_windows(); what belongs here is
+// the integration surface - does the real tracker binary call it correctly,
+// detect triggers correctly, and keep batteries isolated by directory.
+
+function rawFileFor(state, key) {
+  const dir = path.join(state, "raw", key.replace(/\//g, "-"));
+  if (!fs.existsSync(dir)) return null;
+  const files = fs.readdirSync(dir).filter((name) => name.endsWith(".tsv"));
+  if (files.length === 0) return null;
+  return path.join(dir, files.sort().at(-1));
 }
 
-describe("discharge history recording", () => {
-  test("records a 15-minute discharge window", () => {
+function rawRows(state, key) {
+  const file = rawFileFor(state, key);
+  if (!file) return [];
+  return fs
+    .readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .filter((line) => !line.startsWith("#"));
+}
+
+function windowsFile(state) {
+  const file = path.join(state, "windows.tsv");
+  if (!fs.existsSync(file)) return [];
+  return fs
+    .readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .filter((line) => !line.startsWith("#"));
+}
+
+function batteryStateRows(state) {
+  const file = path.join(state, "battery-state.tsv");
+  if (!fs.existsSync(file)) return [];
+  return fs
+    .readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .filter((line) => !line.startsWith("#"))
+    .map((line) => {
+      const [key, openEpoch, openEnergy, estimator, scored, error, updated] =
+        line.split("\t");
+      return { key, openEpoch: Number(openEpoch), openEnergy: Number(openEnergy), estimator, scored: Number(scored), error: Number(error), updated: Number(updated) };
+    });
+}
+
+const KEY_BAT0 = "BAT0:LGC:01AV420:1020";
+const KEY_BAT1 = "BAT1:SMP:01AV425:783";
+
+describe("raw observation capture", () => {
+  test("appends a poll row every run, unconditionally", () => {
+    // Given a battery on AC, where the tracker's old window logic never ran
+    // at all
+    // When the tracker polls
+    // Then a raw row is still written - the poll row is the liveness proof,
+    // independent of whether a window can be built from it
+    withBatteryFixture((f) => {
+      fs.mkdirSync(path.join(f.root, "AC"));
+      fs.writeFileSync(path.join(f.root, "AC", "type"), "Mains\n");
+      fs.writeFileSync(path.join(f.root, "AC", "online"), "1\n");
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        status: "Charging",
+        energy_now: 50000000,
+        energy_full: 50000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
+      });
+      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+      const rows = rawRows(f.state, KEY_BAT0);
+      assert.equal(rows.length, 1);
+      assert.match(rows[0], /^1000\tstart\t/);
+    });
+  });
+
+  test("labels the first ever row for a battery as start", () => {
     withBatteryFixture((f) => {
       writeBattery(f.root, "BAT0", {
         present: 1,
         status: "Discharging",
         energy_now: 50000000,
         energy_full: 50000000,
-      });
-      writeHistory(f.state, [
-        "1000\tsession-a\t10000\t50000000",
-        "1010\tsession-a\t9000\t50000000",
-        "1020\tsession-a\t11000\t50000000",
-        "1030\tsession-a\t10000\t50000000",
-        "1040\tsession-a\t12000\t50000000",
-        "1050\tsession-b\t10000\t50000000",
-        "1060\tsession-b\t9000\t50000000",
-        "1070\tsession-b\t11000\t50000000",
-        "1080\tsession-b\t10000\t50000000",
-        "1090\tsession-c\t12000\t50000000",
-        "1100\tsession-c\t10000\t50000000",
-      ]);
-
-      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
-      for (let timestamp = 1030; timestamp < 1900; timestamp += 30) {
-        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
-      }
-      writeBattery(f.root, "BAT0", { energy_now: 47500000 });
-      runTracker(f, { BATTERY_SESSION_NOW: "1900" });
-      assert.match(
-        fs.readFileSync(path.join(f.state, "discharge-history.tsv"), "utf8"),
-        /^1900\t[0-9]+\tBAT0:[^\t]*\t10000\t/m,
-      );
-    });
-  });
-
-  test("keeps per-battery retention when a new window is recorded", () => {
-    // Given more recorded windows than the per-battery cap, plus one expired
-    // When a new window is recorded
-    // Then each battery keeps its own newest windows, so a cell that is
-    // swapped in only occasionally is not evicted by a heavily used one
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 50000000,
-        energy_full: 40000000,
         manufacturer: "LGC",
         model_name: "01AV420",
         serial_number: "1020",
       });
-      const other = "BAT9:ACME:SPARE:1";
-      const rows = ["# battery-discharge-history\tv3"];
-      rows.push(
-        `4000000\told\tBAT0:LGC:01AV420:1020\t10000\t1\t1\t1\t1\t1\t1\t1\tDischarging`,
-      );
-      for (let index = 0; index < 100; index += 1) {
-        rows.push(
-          `${19990000 + index}\ts${index % 3}\tBAT0:LGC:01AV420:1020\t10000\t1\t1\t1\t1\t1\t1\t1\tDischarging`,
-        );
-      }
-      // A second battery with few windows must survive the prune intact.
-      for (let index = 0; index < 3; index += 1) {
-        rows.push(
-          `${19995000 + index}\tz${index}\t${other}\t4000\t1\t1\t1\t1\t1\t1\t1\tDischarging`,
-        );
-      }
-      fs.writeFileSync(
-        path.join(f.state, "discharge-history.tsv"),
-        rows.join("\n") + "\n",
-      );
-
-      for (const timestamp of [
-        19999100, 19999280, 19999460, 19999640, 19999820,
-      ]) {
-        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
-      }
-      writeBattery(f.root, "BAT0", { energy_now: 47500000 });
-      runTracker(f, { BATTERY_SESSION_NOW: "20000000" });
-
-      const history = fs
-        .readFileSync(path.join(f.state, "discharge-history.tsv"), "utf8")
-        .trim()
-        .split("\n");
-      const forBat0 = history.filter((line) => line.includes("BAT0:LGC"));
-      const forOther = history.filter((line) => line.includes(other));
-      assert.equal(forBat0.length, 96, "BAT0 keeps its own cap, not the file's");
-      assert.equal(forOther.length, 3, "the rarely used battery is not evicted");
-      assert.doesNotMatch(history.join("\n"), /\told\t/);
+      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+      assert.match(rawRows(f.state, KEY_BAT0)[0], /^1000\tstart\t/);
     });
   });
 
-  test("drops pack-level rows when migrating an older history", () => {
-    // Given a history recorded before evidence was per battery
-    // When a window is recorded
-    // Then those rows go, rather than lingering as rows no model can attribute
+  test("labels an ordinary follow-up poll as poll", () => {
     withBatteryFixture((f) => {
       writeBattery(f.root, "BAT0", {
         present: 1,
         status: "Discharging",
         energy_now: 50000000,
         energy_full: 50000000,
-      });
-      writeHistory(f.state, ["19990000\ts0\t9000\t50000000"]);
-
-      for (const timestamp of [1000, 1180, 1360, 1540, 1720]) {
-        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
-      }
-      writeBattery(f.root, "BAT0", { energy_now: 47500000 });
-      runTracker(f, { BATTERY_SESSION_NOW: "1900" });
-
-      const history = fs.readFileSync(
-        path.join(f.state, "discharge-history.tsv"),
-        "utf8",
-      );
-      assert.match(history, /^# battery-discharge-history\tv3$/m);
-      assert.doesNotMatch(history, /19990000/);
-    });
-  });
-
-  test("keeps sampling when a battery recalibrates its reported capacity", () => {
-    // Given a cell that adjusts energy_full mid-session, which is ordinary
-    // behaviour as it deep-discharges
-    // When the next poll arrives
-    // Then the open window survives, because capacity drift is not a swap and
-    // discarding the window on every adjustment records no evidence at all
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 50000000,
-        energy_full: 26000000,
         manufacturer: "LGC",
         model_name: "01AV420",
         serial_number: "1020",
       });
       runTracker(f, { BATTERY_SESSION_NOW: "1000" });
-
-      writeBattery(f.root, "BAT0", {
-        energy_now: 49000000,
-        energy_full: 26390000,
-      });
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "1180" });
-      assert.match(state, /^window_start_epoch=1000$/m);
-      assert.doesNotMatch(state, /battery-set-changed/);
+      writeBattery(f.root, "BAT0", { energy_now: 49500000 });
+      runTracker(f, { BATTERY_SESSION_NOW: "1180" });
+      assert.match(rawRows(f.state, KEY_BAT0)[1], /^1180\tpoll\t/);
     });
   });
 
-  test("restarts sampling when the battery set really changes", () => {
-    // Given a different physical cell in the same slot
-    // When the next poll arrives
-    // Then the open window is discarded, because its energy accounting spans
-    // two different batteries
+  test("labels a status change, so a threshold hold or handover is visible later", () => {
     withBatteryFixture((f) => {
       writeBattery(f.root, "BAT0", {
         present: 1,
         status: "Discharging",
         energy_now: 50000000,
-        energy_full: 26000000,
+        energy_full: 50000000,
         manufacturer: "LGC",
         model_name: "01AV420",
         serial_number: "1020",
       });
       runTracker(f, { BATTERY_SESSION_NOW: "1000" });
-
-      writeBattery(f.root, "BAT0", { energy_now: 49000000, serial_number: "9999" });
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "1180" });
-      assert.match(state, /^window_reset_reason=battery-set-changed$/m);
-      assert.match(state, /^window_start_epoch=1180$/m);
+      writeBattery(f.root, "BAT0", { status: "Not charging" });
+      runTracker(f, { BATTERY_SESSION_NOW: "1180" });
+      assert.match(rawRows(f.state, KEY_BAT0)[1], /^1180\tstatus\t/);
     });
   });
 
-  test("records only the battery that actually discharged", () => {
-    // Given two batteries where only one supplies the system, which is how
-    // these packs behave
-    // When a window completes
-    // Then the idle cell contributes no row, because a row of zeros would bury
-    // its real draw
+  test("labels the first poll after a gap as resume", () => {
+    withBatteryFixture((f) => {
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        status: "Discharging",
+        energy_now: 50000000,
+        energy_full: 50000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
+      });
+      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+      // Well beyond the poll-gap tolerance.
+      runTracker(f, { BATTERY_SESSION_NOW: "50000" });
+      assert.match(rawRows(f.state, KEY_BAT0)[1], /^50000\tresume\t/);
+    });
+  });
+
+  test("keeps two batteries in separate directories, never mixing their rows", () => {
     withBatteryFixture((f) => {
       writeBattery(f.root, "BAT0", {
         present: 1,
@@ -245,103 +214,16 @@ describe("discharge history recording", () => {
         model_name: "01AV425",
         serial_number: "783",
       });
-
-      let energy = 20000000;
-      for (const timestamp of [1000, 1180, 1360, 1540, 1720, 1900]) {
-        fs.writeFileSync(
-          path.join(f.root, "BAT1", "energy_now"),
-          `${energy}\n`,
-        );
-        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
-        energy -= 500000;
-      }
-
-      const history = fs.readFileSync(
-        path.join(f.state, "discharge-history.tsv"),
-        "utf8",
-      );
-      assert.match(history, /BAT1:SMP:01AV425:783/);
-      assert.doesNotMatch(history, /BAT0:LGC/);
-    });
-  });
-
-  test("restarts a window whose per-battery baseline is missing", () => {
-    // Given a session opened by a build that stored only the pack total, which
-    // is the state an upgrade lands in
-    // When the window would otherwise complete
-    // Then it restarts and names the reason, instead of silently recording
-    // nothing while reporting success
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 50000000,
-        energy_full: 50000000,
-      });
       runTracker(f, { BATTERY_SESSION_NOW: "1000" });
-      const statePath = path.join(f.state, "state");
-      fs.writeFileSync(
-        statePath,
-        fs
-          .readFileSync(statePath, "utf8")
-          .replace(/^window_start_energies=.*$/m, "window_start_energies=''"),
-      );
-
-      writeBattery(f.root, "BAT0", { energy_now: 47500000 });
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "1180" });
-      assert.match(state, /^window_reset_reason=battery-baseline-missing$/m);
-      assert.equal(
-        fs.existsSync(path.join(f.state, "discharge-history.tsv")),
-        false,
-      );
+      assert.equal(rawRows(f.state, KEY_BAT0).length, 1);
+      assert.equal(rawRows(f.state, KEY_BAT1).length, 1);
+      assert.ok(rawFileFor(f.state, KEY_BAT0) !== rawFileFor(f.state, KEY_BAT1));
     });
   });
+});
 
-  test("does not claim a sample when no battery measurably discharged", () => {
-    // Given a window that elapses with the pack draining but no single battery
-    // showing a drop of its own
-    // When the window completes
-    // Then no history is written and the reason says so
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 50000000,
-        energy_full: 50000000,
-      });
-      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
-      // Rewrite the baseline so the per-battery start is below the current
-      // reading while the pack total still shows a drop.
-      const statePath = path.join(f.state, "state");
-      fs.writeFileSync(
-        statePath,
-        fs
-          .readFileSync(statePath, "utf8")
-          .replace(
-            /^window_start_energies=.*$/m,
-            "window_start_energies=BAT0=40000000",
-          )
-          .replace(/^window_start_energy_uwh=.*$/m, "window_start_energy_uwh=50000000"),
-      );
-      writeBattery(f.root, "BAT0", { energy_now: 47500000 });
-      // Poll within the gap tolerance so the window survives to complete.
-      for (const timestamp of [1180, 1360, 1540, 1720]) {
-        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
-      }
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "1900" });
-      assert.match(state, /^window_reset_reason=no-battery-evidence$/m);
-      assert.equal(
-        fs.existsSync(path.join(f.state, "discharge-history.tsv")),
-        false,
-      );
-    });
-  });
-
-  test("records which estimator each battery should project with", () => {
-    // Given a completed window
-    // When the tracker records it
-    // Then it also rescores that battery, so the choice is kept off the
-    // panel-refresh path
+describe("incremental extraction after a poll", () => {
+  test("derives a window in windows.tsv once enough polls complete one", () => {
     withBatteryFixture((f) => {
       writeBattery(f.root, "BAT0", {
         present: 1,
@@ -352,85 +234,192 @@ describe("discharge history recording", () => {
         model_name: "01AV420",
         serial_number: "1020",
       });
-      for (const timestamp of [1000, 1180, 1360, 1540, 1720]) {
+      let energy = 50000000;
+      for (const timestamp of [1000, 1180, 1360, 1540, 1720, 1900]) {
+        writeBattery(f.root, "BAT0", { energy_now: energy });
         runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
+        energy -= 500000;
       }
-      writeBattery(f.root, "BAT0", { energy_now: 47500000 });
-      runTracker(f, { BATTERY_SESSION_NOW: "1900" });
-
-      const store = fs.readFileSync(
-        path.join(f.state, "estimators.tsv"),
-        "utf8",
-      );
-      assert.match(store, /^# battery-estimators\tv1$/m);
-      assert.match(store, /^BAT0:LGC:01AV420:1020\t\w+\t/m);
+      const windows = windowsFile(f.state);
+      assert.equal(windows.length, 1);
+      assert.match(windows[0], new RegExp(`\\t${KEY_BAT0.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}\\t`));
     });
   });
 
-  test("leaves the history untouched when no window completed", () => {
+  test("never appends the same window twice on repeated polls", () => {
     withBatteryFixture((f) => {
       writeBattery(f.root, "BAT0", {
         present: 1,
         status: "Discharging",
         energy_now: 50000000,
         energy_full: 50000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
       });
-      // An expired row a prune would remove, if a prune were due.
-      writeHistory(f.state, ["4000000\told-session\t10000\t50000000"]);
-      const before = fs.readFileSync(
-        path.join(f.state, "discharge-history.tsv"),
-        "utf8",
-      );
-
-      runTracker(f, { BATTERY_SESSION_NOW: "20000000" });
-      assert.equal(
-        fs.readFileSync(path.join(f.state, "discharge-history.tsv"), "utf8"),
-        before,
-      );
+      let energy = 50000000;
+      for (const timestamp of [1000, 1180, 1360, 1540, 1720, 1900]) {
+        writeBattery(f.root, "BAT0", { energy_now: energy });
+        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
+        energy -= 500000;
+      }
+      const afterFirstWindow = windowsFile(f.state).length;
+      writeBattery(f.root, "BAT0", { energy_now: energy });
+      runTracker(f, { BATTERY_SESSION_NOW: "2080" });
+      assert.equal(windowsFile(f.state).length, afterFirstWindow);
     });
   });
 
-  test("resets a discharge window when energy increases", () => {
+  test("records only the battery that actually discharged", () => {
+    // These batteries discharge in sequence, not together: while one
+    // supplies the system the other sits idle. A row of zeros for the idle
+    // one would bury its real draw, so it contributes no window at all.
+    withBatteryFixture((f) => {
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        status: "Not charging",
+        energy_now: 8000000,
+        energy_full: 12090000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
+      });
+      writeBattery(f.root, "BAT1", {
+        present: 1,
+        status: "Discharging",
+        energy_now: 20000000,
+        energy_full: 26000000,
+        manufacturer: "SMP",
+        model_name: "01AV425",
+        serial_number: "783",
+      });
+      let energy = 20000000;
+      for (const timestamp of [1000, 1180, 1360, 1540, 1720, 1900]) {
+        writeBattery(f.root, "BAT1", { energy_now: energy });
+        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
+        energy -= 500000;
+      }
+      const windows = windowsFile(f.state);
+      assert.ok(windows.length >= 1);
+      for (const window of windows) {
+        assert.match(window, /BAT1:SMP:01AV425:783/);
+        assert.doesNotMatch(window, /BAT0:LGC/);
+      }
+    });
+  });
+
+  test("rescores and records the selected estimator in battery-state.tsv", () => {
     withBatteryFixture((f) => {
       writeBattery(f.root, "BAT0", {
         present: 1,
         status: "Discharging",
         energy_now: 50000000,
         energy_full: 50000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
+      });
+      let energy = 50000000;
+      for (const timestamp of [1000, 1180, 1360, 1540, 1720, 1900]) {
+        writeBattery(f.root, "BAT0", { energy_now: energy });
+        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
+        energy -= 500000;
+      }
+      const rows = batteryStateRows(f.state);
+      const bat0 = rows.find((row) => row.key === KEY_BAT0);
+      assert.ok(bat0, "expected a battery-state row for BAT0");
+      assert.equal(bat0.estimator, "median");
+    });
+  });
+
+  test("reports the still-open window's progress in battery-state.tsv", () => {
+    withBatteryFixture((f) => {
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        status: "Discharging",
+        energy_now: 50000000,
+        energy_full: 50000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
+      });
+      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+      const rows = batteryStateRows(f.state);
+      const bat0 = rows.find((row) => row.key === KEY_BAT0);
+      assert.equal(bat0.openEpoch, 1000);
+      assert.equal(bat0.openEnergy, 50000000);
+    });
+  });
+});
+
+describe("battery identity: recalibration versus a real swap", () => {
+  test("a capacity recalibration does not start a new identity", () => {
+    // A cell adjusting its reported energy_full while deep-discharging is
+    // ordinary behaviour, not a swap: capacity is not part of the identity
+    // key, so raw rows keep landing in the same directory.
+    withBatteryFixture((f) => {
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        status: "Discharging",
+        energy_now: 50000000,
+        energy_full: 26000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
+      });
+      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+      writeBattery(f.root, "BAT0", {
+        energy_now: 49000000,
+        energy_full: 26390000,
+      });
+      runTracker(f, { BATTERY_SESSION_NOW: "1180" });
+      assert.equal(rawRows(f.state, KEY_BAT0).length, 2);
+    });
+  });
+
+  test("a different serial starts a fresh raw file under a new identity", () => {
+    withBatteryFixture((f) => {
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        status: "Discharging",
+        energy_now: 50000000,
+        energy_full: 26000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
+      });
+      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+      const oldKey = KEY_BAT0;
+      writeBattery(f.root, "BAT0", { energy_now: 49000000, serial_number: "9999" });
+      runTracker(f, { BATTERY_SESSION_NOW: "1180" });
+      const newKey = "BAT0:LGC:01AV420:9999";
+
+      assert.equal(rawRows(f.state, oldKey).length, 1, "the old identity's file stops growing");
+      assert.equal(rawRows(f.state, newKey).length, 1, "the new identity starts its own file");
+    });
+  });
+});
+
+describe("power session and discharge window edge cases", () => {
+  test("resets the window rather than completing it when energy rises", () => {
+    withBatteryFixture((f) => {
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        status: "Discharging",
+        energy_now: 50000000,
+        energy_full: 50000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
       });
       runTracker(f, { BATTERY_SESSION_NOW: "1000" });
       writeBattery(f.root, "BAT0", { energy_now: 49000000 });
-      runTracker(f, { BATTERY_SESSION_NOW: "1030" });
+      runTracker(f, { BATTERY_SESSION_NOW: "1180" });
       writeBattery(f.root, "BAT0", { energy_now: 50000000 });
-      runTracker(f, { BATTERY_SESSION_NOW: "1060" });
-      writeBattery(f.root, "BAT0", { energy_now: 49000000 });
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "1090" });
-      assert.equal(
-        fs.existsSync(path.join(f.state, "discharge-history.tsv")),
-        false,
-      );
-      assert.match(state, /^window_start_epoch=1060$/m);
-      assert.match(state, /^window_reset_reason=energy-increased$/m);
-    });
-  });
-
-  test("does not bridge a long polling gap into a discharge window", () => {
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 50000000,
-        energy_full: 50000000,
-      });
-      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
-      writeBattery(f.root, "BAT0", { energy_now: 45000000 });
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "2000" });
-      assert.equal(
-        fs.existsSync(path.join(f.state, "discharge-history.tsv")),
-        false,
-      );
-      assert.match(state, /^window_start_epoch=2000$/m);
-      assert.match(state, /^window_reset_reason=polling-gap$/m);
+      runTracker(f, { BATTERY_SESSION_NOW: "1360" });
+      // No window can have completed: only 360s have elapsed, and energy
+      // rose partway through.
+      assert.equal(windowsFile(f.state).length, 0);
     });
   });
 
@@ -441,19 +430,37 @@ describe("discharge history recording", () => {
         status: "Discharging",
         energy_now: 50000000,
         energy_full: 50000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
+      });
+      let energy = 50000000;
+      for (const timestamp of [1000, 1180, 1360, 1540, 1720]) {
+        writeBattery(f.root, "BAT0", { energy_now: energy });
+        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
+        energy -= 100000;
+      }
+      writeBattery(f.root, "BAT0", { energy_now: 10000000 }); // implausible drop
+      runTracker(f, { BATTERY_SESSION_NOW: "1900" });
+      assert.equal(windowsFile(f.state).length, 0);
+    });
+  });
+
+  test("does not bridge a long polling gap into one discharge window", () => {
+    withBatteryFixture((f) => {
+      writeBattery(f.root, "BAT0", {
+        present: 1,
+        status: "Discharging",
+        energy_now: 50000000,
+        energy_full: 50000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
       });
       runTracker(f, { BATTERY_SESSION_NOW: "1000" });
-      for (let timestamp = 1030; timestamp < 1900; timestamp += 30) {
-        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
-      }
-      writeBattery(f.root, "BAT0", { energy_now: 10000000 });
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "1900" });
-      assert.equal(
-        fs.existsSync(path.join(f.state, "discharge-history.tsv")),
-        false,
-      );
-      assert.match(state, /^window_start_epoch=1900$/m);
-      assert.match(state, /^window_reset_reason=implausible-draw$/m);
+      writeBattery(f.root, "BAT0", { energy_now: 45000000 });
+      runTracker(f, { BATTERY_SESSION_NOW: "50000" }); // far past the poll tolerance
+      assert.equal(windowsFile(f.state).length, 0);
     });
   });
 
@@ -464,191 +471,39 @@ describe("discharge history recording", () => {
         status: "Discharging",
         energy_full: 50000000,
       });
-      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
-      writeBattery(f.root, "BAT0", { energy_now: 0 });
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "1030" });
-      assert.equal(
-        fs.existsSync(path.join(f.state, "discharge-history.tsv")),
-        false,
-      );
-      assert.match(state, /^window_start_epoch=0$/m);
-      assert.match(state, /^last_sample_energy_uwh=0$/m);
-      assert.match(state, /^window_reset_reason=energy-unavailable$/m);
-    });
-  });
-
-  test("resets sampling when the clock moves backwards", () => {
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 50000000,
-        energy_full: 50000000,
-      });
-      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
-      writeBattery(f.root, "BAT0", { energy_now: 49000000 });
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "900" });
-      assert.equal(
-        fs.existsSync(path.join(f.state, "discharge-history.tsv")),
-        false,
-      );
-      assert.match(state, /^window_start_epoch=900$/m);
-      assert.match(state, /^window_reset_reason=polling-gap$/m);
+      const state = runTracker(f, { BATTERY_SESSION_NOW: "1000" });
+      assert.match(state, /^previous_state=on-battery$/m);
+      assert.equal(windowsFile(f.state).length, 0);
     });
   });
 });
 
-describe("battery topology and aggregation", () => {
-  test("aggregates compatible batteries into one discharge window", () => {
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 50000000,
-        energy_full: 60000000,
-      });
-      writeBattery(f.root, "BAT1", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 40000000,
-        energy_full: 40000000,
-      });
-      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
-      for (let timestamp = 1030; timestamp < 1900; timestamp += 30) {
-        runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
-      }
-      writeBattery(f.root, "BAT0", { energy_now: 47500000 });
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "1900" });
-      assert.match(state, /^window_start_energy_uwh=87500000$/m);
-      assert.match(
-        fs.readFileSync(path.join(f.state, "discharge-history.tsv"), "utf8"),
-        /^1900\t[0-9]+\tBAT0:[^\t]*\t10000\t/m,
-      );
-    });
-  });
-
-  test("invalidates only the active window when a battery is added", () => {
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 50000000,
-        energy_full: 60000000,
-      });
-      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
-      writeBattery(f.root, "BAT1", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 40000000,
-        energy_full: 40000000,
-      });
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "1030" });
-      assert.equal(
-        fs.existsSync(path.join(f.state, "discharge-history.tsv")),
-        false,
-      );
-      assert.match(state, /^window_start_epoch=1030$/m);
-      assert.match(state, /^window_start_energy_uwh=90000000$/m);
-      assert.match(state, /^window_reset_reason=battery-set-changed$/m);
-    });
-  });
-
-  test("invalidates only the active window when a battery is removed", () => {
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 50000000,
-        energy_full: 60000000,
-      });
-      writeBattery(f.root, "BAT1", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 40000000,
-        energy_full: 40000000,
-      });
-      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
-      fs.rmSync(path.join(f.root, "BAT1"), { recursive: true });
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "1030" });
-      assert.equal(
-        fs.existsSync(path.join(f.state, "discharge-history.tsv")),
-        false,
-      );
-      assert.match(state, /^window_start_epoch=1030$/m);
-      assert.match(state, /^window_start_energy_uwh=50000000$/m);
-      assert.match(state, /^window_reset_reason=battery-set-changed$/m);
-    });
-  });
-
-  test("rejects mixed battery energy measurement modes", () => {
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", {
-        present: 1,
-        status: "Discharging",
-        energy_now: 50000000,
-        energy_full: 60000000,
-      });
-      runTracker(f, { BATTERY_SESSION_NOW: "1000" });
-      writeBattery(f.root, "BAT1", {
-        present: 1,
-        status: "Discharging",
-        charge_now: 4000000,
-        charge_full: 4000000,
-      });
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "1030" });
-      assert.match(state, /^window_start_epoch=0$/m);
-      assert.match(state, /^last_sample_energy_uwh=0$/m);
-      assert.match(state, /^window_reset_reason=energy-unavailable$/m);
-    });
-  });
-
-  test("ignores unknown history schemas safely", () => {
-    withBatteryFixture((f) => {
-      writeBattery(f.root, "BAT0", {
-        present: 1,
-        status: "Discharging",
-        energy_full: 50000000,
-      });
-      fs.writeFileSync(
-        path.join(f.state, "discharge-history.tsv"),
-        [
-          "# battery-discharge-history\tv99",
-          "1000\ta\t10000\t50000000",
-          "1010\tb\t10000\t50000000",
-        ].join("\n") + "\n",
-      );
-      const state = runTracker(f, { BATTERY_SESSION_NOW: "2000" });
-      assert.match(state, /^window_reset_reason=energy-unavailable$/m);
-      assert.equal(
-        fs
-          .readFileSync(path.join(f.state, "discharge-history.tsv"), "utf8")
-          .split("\n")[0],
-        "# battery-discharge-history\tv99",
-      );
-    });
-  });
-});
-
-describe("state file permissions", () => {
-  test("writes runtime state and history as user-only files", () => {
+describe("state file and windows.tsv permissions", () => {
+  test("writes runtime state and windows as user-only files", () => {
     withBatteryFixture((f) => {
       writeBattery(f.root, "BAT0", {
         present: 1,
         status: "Discharging",
         energy_now: 50000000,
         energy_full: 50000000,
+        manufacturer: "LGC",
+        model_name: "01AV420",
+        serial_number: "1020",
       });
-      for (const timestamp of [1000, 1180, 1360, 1540, 1720]) {
+      let energy = 50000000;
+      for (const timestamp of [1000, 1180, 1360, 1540, 1720, 1900]) {
+        writeBattery(f.root, "BAT0", { energy_now: energy });
         runTracker(f, { BATTERY_SESSION_NOW: String(timestamp) });
+        energy -= 500000;
       }
-      writeBattery(f.root, "BAT0", { energy_now: 47500000 });
-      runTracker(f, { BATTERY_SESSION_NOW: "1900" });
-
       assert.equal(fs.statSync(path.join(f.state, "state")).mode & 0o777, 0o600);
       assert.equal(
-        fs.statSync(path.join(f.state, "discharge-history.tsv")).mode & 0o777,
+        fs.statSync(path.join(f.state, "windows.tsv")).mode & 0o777,
         0o600,
       );
+      const rawFile = rawFileFor(f.state, KEY_BAT0);
+      assert.ok(rawFile);
+      assert.equal(fs.statSync(rawFile).mode & 0o777, 0o600);
     });
   });
 });

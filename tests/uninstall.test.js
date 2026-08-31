@@ -29,8 +29,8 @@ function withUninstallFixture(callback) {
     fs.writeFileSync(path.join(units, "battery-session-tracker.service"), "");
     fs.writeFileSync(path.join(state, "state"), "previous_state=on-battery\n");
     fs.writeFileSync(
-      path.join(state, "discharge-history.tsv"),
-      "# battery-discharge-history\tv1\n",
+      path.join(state, "windows.tsv"),
+      "# battery-windows\tv0.1.0\n",
     );
     fs.mkdirSync(path.join(state, "metrics"));
     fs.writeFileSync(path.join(state, "metrics", "future-data"), "retained\n");
@@ -61,7 +61,7 @@ test("uninstall --keep-data retains all collected data", () => {
     assert.equal(fs.existsSync(f.plugin), false);
     assert.equal(fs.existsSync(path.join(f.state, "state")), true);
     assert.equal(
-      fs.existsSync(path.join(f.state, "discharge-history.tsv")),
+      fs.existsSync(path.join(f.state, "windows.tsv")),
       true,
     );
     assert.equal(

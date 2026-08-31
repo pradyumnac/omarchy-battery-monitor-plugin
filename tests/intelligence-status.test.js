@@ -20,15 +20,22 @@ const {
   KEY_RETIRED,
   installBattery,
   writeMains,
-  writeHistory,
-  writeEstimators,
-  windowsFor,
+  writeWindows,
+  windowsForBattery,
+  windowRow,
+  writeBatteryState,
+  batteryStateRow,
+  writeGaps,
+  gapRow,
   runStatus,
 } = require("./support/battery");
 
 const NOW = 20000000;
 const ansi = String.fromCharCode(27);
 
+// The real fields the tracker writes today (ADR-0001): session bookkeeping
+// only. Sampling-window state and the selected estimator live in
+// battery-state.tsv now, not here.
 function writeState(stateDir, fields = {}) {
   const values = {
     state_schema_version: 2,
@@ -36,9 +43,10 @@ function writeState(stateDir, fields = {}) {
     state_since: 19999000,
     state_since_at_least: 0,
     last_observed: 19999990,
-    discharge_session_id: 19999000,
-    window_start_epoch: 19999550,
-    window_reset_reason: "''",
+    last_charge_start: 0,
+    last_charge_end: 0,
+    charge_start_levels: "''",
+    charge_session_valid: 0,
     battery_fingerprint: "BAT0:energy:12090000",
     ...fields,
   };
@@ -171,7 +179,7 @@ describe("per-battery reporting", () => {
       });
       singleBattery(f);
       writeState(f.state);
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 12, drawMw: 10000 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 12, drawMw: 10000 }));
 
       const result = status(f);
       // BAT1 has evidence; BAT0 has none of its own and must say so.
@@ -185,9 +193,9 @@ describe("per-battery reporting", () => {
     withStatus((f) => {
       singleBattery(f);
       writeState(f.state);
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 12, drawMw: 10000 }));
-      writeEstimators(f.state, [
-        { key: KEY_BAT1, estimator: "recent", meanError: 400 },
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 12, drawMw: 10000 }));
+      writeBatteryState(f.state, [
+        batteryStateRow({ key: KEY_BAT1, estimator: "recent", scored: 8, error: 400 }),
       ]);
       assert.match(status(f).stdout, /Typical draw\s+10\.0 W · recent \(±0\.4 W held-out\)/);
     });
@@ -203,7 +211,10 @@ describe("per-battery reporting", () => {
         energy_now: 8000000,
       });
       singleBattery(f);
-      writeState(f.state, { window_start_epoch: 19999550 });
+      writeState(f.state);
+      writeBatteryState(f.state, [
+        batteryStateRow({ key: KEY_BAT1, openEpoch: 19999550, openEnergy: 13000000 }),
+      ]);
 
       const lines = status(f).stdout.split("\n");
       const bat1Index = lines.findIndex((line) => line.includes("BAT1:"));
@@ -253,9 +264,9 @@ describe("batteries that are not installed", () => {
     withStatus((f) => {
       singleBattery(f);
       writeState(f.state);
-      writeHistory(f.state, [
-        ...windowsFor(KEY_RETIRED, { count: 9, drawMw: 3000, start: 19990000 }),
-        ...windowsFor(KEY_BAT1, { count: 12, drawMw: 10000, start: 19991000 }),
+      writeWindows(f.state, [
+        ...windowsForBattery(KEY_RETIRED, { count: 9, drawMw: 3000, start: 19980000 }),
+        ...windowsForBattery(KEY_BAT1, { count: 12, drawMw: 10000, start: 19981000 }),
       ]);
 
       const result = status(f);
@@ -270,7 +281,7 @@ describe("batteries that are not installed", () => {
     withStatus((f) => {
       singleBattery(f);
       writeState(f.state);
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 6 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 6 }));
       assert.doesNotMatch(status(f).stdout, /Not installed/);
     });
   });
@@ -281,7 +292,7 @@ describe("pack summary and lifecycle", () => {
     withStatus((f) => {
       singleBattery(f);
       writeState(f.state);
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 12, drawMw: 10000 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 12, drawMw: 10000 }));
       const result = status(f);
       assert.match(result.stdout, /Pack model: ready/);
       assert.match(result.stdout, /Pack remaining: 1h 18m/);
@@ -294,7 +305,7 @@ describe("pack summary and lifecycle", () => {
       singleBattery(f, { status: "Charging" });
       writeMains(f.root, 1);
       writeState(f.state, { previous_state: "on-charge", window_start_epoch: 0 });
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 12, drawMw: 10000 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 12, drawMw: 10000 }));
       const result = status(f);
       assert.match(result.stdout, /Power: charging/);
       assert.match(result.stdout, /If unplugged now: 1h 18m/);
@@ -337,7 +348,7 @@ describe("pack summary and lifecycle", () => {
     withStatus((f) => {
       singleBattery(f);
       writeState(f.state);
-      writeHistory(f.state, [], "# battery-discharge-history\tv99");
+      writeWindows(f.state, [], "# battery-windows\tv99.0.0");
       assert.match(
         status(f).stdout,
         /Pack model: unavailable · unsupported history format/,
@@ -345,16 +356,15 @@ describe("pack summary and lifecycle", () => {
     });
   });
 
-  test("names pack-level rows from an older schema as unusable", () => {
+  test("names windows an interruption made ineligible, without discarding them", () => {
     withStatus((f) => {
       singleBattery(f);
       writeState(f.state);
-      writeHistory(
-        f.state,
-        ["19990000\ts0\t9000\t26000000"],
-        "# battery-discharge-history\tv2",
-      );
-      assert.match(status(f).stdout, /Legacy rows: 1 pack-level row\(s\)/);
+      writeWindows(f.state, [
+        ...windowsForBattery(KEY_BAT1, { count: 10, drawMw: 10000 }),
+        windowRow({ epoch: 19999000, key: KEY_BAT1, drawMw: 50000, eligible: 0 }),
+      ]);
+      assert.match(status(f).stdout, /Ineligible windows: 1 window\(s\) spanned an interruption/);
     });
   });
 });
@@ -364,7 +374,7 @@ describe("freshness and diagnostics", () => {
     withStatus((f) => {
       singleBattery(f);
       writeState(f.state, { last_observed: 19990000 });
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 12, drawMw: 10000 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 12, drawMw: 10000 }));
       const result = status(f);
       assert.match(result.stdout, /Pack remaining \(cached\)/);
       assert.match(result.stdout, /Data: stale · tracker updated/);
@@ -375,19 +385,19 @@ describe("freshness and diagnostics", () => {
     withStatus((f) => {
       singleBattery(f);
       writeState(f.state, { last_observed: NOW + 500 });
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 12, drawMw: 10000 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 12, drawMw: 10000 }));
       assert.match(status(f).stdout, /Data: clock mismatch/);
     });
   });
 
-  test("explains a sampling restart in words, not a reason code", () => {
+  test("explains a sampling restart in words, under the battery it interrupted", () => {
     withStatus((f) => {
       singleBattery(f);
-      writeState(f.state, { window_reset_reason: "battery-baseline-missing" });
-      assert.match(
-        status(f).stdout,
-        /Sampling: restarted · per-battery baseline missing after upgrade/,
-      );
+      writeState(f.state);
+      writeGaps(f.state, [
+        gapRow({ key: KEY_BAT1, startEpoch: 19998000, endEpoch: 19999000, cause: "asleep" }),
+      ]);
+      assert.match(status(f).stdout, /Sampling\s+restarted · machine was suspended/);
     });
   });
 
@@ -395,7 +405,7 @@ describe("freshness and diagnostics", () => {
     withStatus((f) => {
       singleBattery(f);
       writeState(f.state);
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 12 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 12 }));
       const concise = status(f);
       const verbose = status(f, { BATTERY_STATUS_VERBOSE: "1" });
       assert.doesNotMatch(concise.stdout, /State file:/);

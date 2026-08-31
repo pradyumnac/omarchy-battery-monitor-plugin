@@ -19,11 +19,13 @@ const statusScript = path.join(
 );
 const backtestScript = path.join(repository, "scripts", "battery-backtest.sh");
 const exportScript = path.join(repository, "scripts", "battery-export.sh");
+const reextractScript = path.join(repository, "scripts", "battery-reextract.sh");
 
-const HISTORY_HEADER_V3 = "# battery-discharge-history\tv3";
-const HISTORY_HEADER_V2 = "# battery-discharge-history\tv2";
-const HISTORY_HEADER_V1 = "# battery-discharge-history\tv1";
-const ESTIMATOR_HEADER = "# battery-estimators\tv1";
+// ADR-0001 generation: the files the tracker actually writes today.
+const RAW_HEADER = "# battery-raw-observations\tv0.1.0";
+const WINDOWS_HEADER = "# battery-windows\tv0.1.0";
+const GAPS_HEADER = "# battery-gaps\tv0.1.0";
+const BATTERY_STATE_HEADER = "# battery-state\tv0.1.0";
 
 // Two real cells from a ThinkPad, so identities in tests look like the ones
 // the code meets in the field.
@@ -68,11 +70,91 @@ function writeMains(root, online = 1) {
   return writeBattery(root, "AC", { type: "Mains", online });
 }
 
-// One schema-v3 record. Defaults describe a healthy cell mid-discharge, so a
-// test only states the field it is actually about.
-function historyRow({
+// --- ADR-0001 builders -------------------------------------------------
+
+function rawDirName(key) {
+  return key.replace(/\//g, "-");
+}
+
+// One raw observation row, matching battery_raw_row()'s column order:
+// epoch, trigger, rules, status, energy_now, energy_full, energy_full_design,
+// voltage_now, power_now, capacity, cycle_count, end_threshold, ac_online,
+// boot_id, suspend_count, uptime_s.
+function rawRow({
   epoch,
-  session = "s0",
+  trigger = "poll",
+  rules = "v0.1.0",
+  status = "Discharging",
+  energyNow = 13000000,
+  energyFull = 26000000,
+  energyFullDesign = 49500000,
+  voltageNow = 11297000,
+  powerNow = 9941000,
+  capacity = 50,
+  cycleCount = 109,
+  endThreshold = 90,
+  acOnline = 0,
+  bootId = "boot-a",
+  suspendCount = 0,
+  uptimeSeconds = 1000,
+} = {}) {
+  return [
+    epoch,
+    trigger,
+    rules,
+    status,
+    energyNow,
+    energyFull,
+    energyFullDesign,
+    voltageNow,
+    powerNow,
+    capacity,
+    cycleCount,
+    endThreshold,
+    acOnline,
+    bootId,
+    suspendCount,
+    uptimeSeconds,
+  ].join("\t");
+}
+
+// Write one battery's raw file for one local date. `date` defaults to a
+// fixed value so tests are not sensitive to when they happen to run;
+// pass the real current date only when a test cares about file naming.
+function writeRawDay(stateDir, key, rows, { date = "2026-01-01", header = RAW_HEADER } = {}) {
+  const dir = path.join(stateDir, "raw", rawDirName(key));
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${date}.tsv`);
+  fs.writeFileSync(file, [header, ...rows].join("\n") + "\n");
+  return file;
+}
+
+// A run of `count` polls, 180s apart, over a discharging battery, so the
+// extractor sees exactly the shape a live tracker would produce: enough
+// polls to complete `count * 180 / 900` windows.
+function rawPollRun(key, { count = 30, start = 1900000000, energyStart = 26000000, drawUwhPerPoll = 500000, ...rest } = {}) {
+  let energy = energyStart;
+  const rows = [];
+  for (let index = 0; index < count; index += 1) {
+    rows.push(
+      rawRow({
+        epoch: start + index * 180,
+        trigger: index === 0 ? "start" : "poll",
+        energyNow: energy,
+        ...rest,
+      }),
+    );
+    energy -= drawUwhPerPoll;
+  }
+  return rows;
+}
+
+// One windows.tsv row, matching battery_extract_windows()'s output order:
+// epoch, session_epoch, key, draw_mw, energy_now, energy_full,
+// energy_full_design, voltage_now, power_now, capacity, cycle_count, eligible.
+function windowRow({
+  epoch,
+  sessionEpoch,
   key = KEY_BAT1,
   drawMw = 10000,
   energyNow = 13000000,
@@ -82,11 +164,11 @@ function historyRow({
   powerNow = 9941000,
   capacity = 50,
   cycleCount = 109,
-  status = "Discharging",
+  eligible = 1,
 } = {}) {
   return [
     epoch,
-    session,
+    sessionEpoch ?? epoch,
     key,
     drawMw,
     energyNow,
@@ -96,38 +178,78 @@ function historyRow({
     powerNow,
     capacity,
     cycleCount,
-    status,
+    eligible,
   ].join("\t");
 }
 
-function writeHistory(stateDir, rows, header = HISTORY_HEADER_V3) {
-  const file = path.join(stateDir, "discharge-history.tsv");
+// `count` windows for one battery, one continuous session unless `sessions`
+// says otherwise. Mirrors what battery_extract_windows() actually produces:
+// a continuous discharge run is one session however many windows it spans.
+// Defaults to the small-epoch convention view.test.js and
+// intelligence-status.test.js use (NOW around 20000000, so windows just
+// before it are not future-dated). Pass a large `start` explicitly when a
+// test wants realistic wall-clock-scale epochs instead.
+function windowsForBattery(key, { count = 12, sessions = 3, drawMw = 10000, start = 19990000, eligible = 1, ...rest } = {}) {
+  const perSession = Math.max(1, Math.ceil(count / sessions));
+  return Array.from({ length: count }, (_, index) => {
+    const sessionIndex = Math.floor(index / perSession);
+    return windowRow({
+      epoch: start + index * 900,
+      sessionEpoch: start + sessionIndex * perSession * 900,
+      key,
+      drawMw: typeof drawMw === "function" ? drawMw(index) : drawMw,
+      eligible,
+      ...rest,
+    });
+  });
+}
+
+function writeWindows(stateDir, rows, header = WINDOWS_HEADER) {
+  const file = path.join(stateDir, "windows.tsv");
   fs.writeFileSync(file, [header, ...rows].join("\n") + "\n");
   return file;
 }
 
-// `count` windows for one battery, spread across `sessions` discharge sessions.
-function windowsFor(key, { count = 12, sessions = 3, drawMw = 10000, start = 19990000, ...rest } = {}) {
-  return Array.from({ length: count }, (_, index) =>
-    historyRow({
-      epoch: start + index,
-      session: `${key}-s${index % sessions}`,
-      key,
-      drawMw: typeof drawMw === "function" ? drawMw(index) : drawMw,
-      ...rest,
-    }),
-  );
+// One gaps.tsv row: key, start_epoch, end_epoch, cause, ac_start, ac_end,
+// energy_before_uwh, energy_after_uwh, energy_delta_uwh.
+function gapRow({
+  key = KEY_BAT1,
+  startEpoch,
+  endEpoch,
+  cause = "asleep",
+  acStart = 0,
+  acEnd = 0,
+  energyBefore = 13000000,
+  energyAfter = 12950000,
+} = {}) {
+  const delta = Math.abs(energyBefore - energyAfter);
+  return [key, startEpoch, endEpoch, cause, acStart, acEnd, energyBefore, energyAfter, delta].join("\t");
 }
 
-function writeEstimators(stateDir, entries, header = ESTIMATOR_HEADER) {
-  const rows = entries.map(
-    ({ key, estimator, scored = 20, meanError = 100, epoch = 19999999 }) =>
-      [key, estimator, scored, meanError, epoch].join("\t"),
-  );
-  fs.writeFileSync(
-    path.join(stateDir, "estimators.tsv"),
-    [header, ...rows].join("\n") + "\n",
-  );
+function writeGaps(stateDir, rows, header = GAPS_HEADER) {
+  const file = path.join(stateDir, "gaps.tsv");
+  fs.writeFileSync(file, [header, ...rows].join("\n") + "\n");
+  return file;
+}
+
+// One battery-state.tsv row: key, open_epoch, open_energy, estimator,
+// scored, error, updated_epoch.
+function batteryStateRow({
+  key = KEY_BAT1,
+  openEpoch = 0,
+  openEnergy = 0,
+  estimator = "median",
+  scored = 0,
+  error = 0,
+  updatedEpoch = 1900000000,
+} = {}) {
+  return [key, openEpoch, openEnergy, estimator, scored, error, updatedEpoch].join("\t");
+}
+
+function writeBatteryState(stateDir, rows, header = BATTERY_STATE_HEADER) {
+  const file = path.join(stateDir, "battery-state.tsv");
+  fs.writeFileSync(file, [header, ...rows].join("\n") + "\n");
+  return file;
 }
 
 function baseEnv(fixture, extra = {}) {
@@ -213,11 +335,24 @@ module.exports = {
   statusScript,
   backtestScript,
   exportScript,
+  reextractScript,
   modelLibrary,
-  HISTORY_HEADER_V1,
-  HISTORY_HEADER_V2,
-  HISTORY_HEADER_V3,
-  ESTIMATOR_HEADER,
+  // The files the tracker actually writes today (ADR-0001).
+  RAW_HEADER,
+  WINDOWS_HEADER,
+  GAPS_HEADER,
+  BATTERY_STATE_HEADER,
+  rawDirName,
+  rawRow,
+  writeRawDay,
+  rawPollRun,
+  windowRow,
+  windowsForBattery,
+  writeWindows,
+  gapRow,
+  writeGaps,
+  batteryStateRow,
+  writeBatteryState,
   BAT0,
   BAT1,
   KEY_BAT0,
@@ -226,10 +361,6 @@ module.exports = {
   writeBattery,
   installBattery,
   writeMains,
-  historyRow,
-  writeHistory,
-  windowsFor,
-  writeEstimators,
   runTracker,
   runView,
   runStatus,

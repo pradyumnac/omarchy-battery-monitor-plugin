@@ -28,12 +28,10 @@ readonly BATTERY_MODEL_MAX_POLL_GAP_SECONDS=$((3 * BATTERY_MODEL_POLL_INTERVAL_S
 
 # A discharge window must run this long before it becomes evidence.
 readonly BATTERY_MODEL_WINDOW_SECONDS=$((15 * 60))
-# Only windows this recent take part in the model.
+# Only windows this recent take part in the model. Retention itself is a
+# read-time interpretation now, not a write-time row cap (ADR-0001): raw
+# observations and windows.tsv are never pruned.
 readonly BATTERY_MODEL_LOOKBACK_SECONDS=$((30 * 24 * 60 * 60))
-# Rows older than this are pruned from the history file.
-readonly BATTERY_MODEL_RETENTION_SECONDS=$((180 * 24 * 60 * 60))
-# Rows kept after a prune, newest last.
-readonly BATTERY_MODEL_RETENTION_ROWS=96
 # The full evidence gate: the model is only "ready" at or above both counts.
 readonly BATTERY_MODEL_MIN_WINDOWS=12
 readonly BATTERY_MODEL_MIN_SESSIONS=3
@@ -51,25 +49,10 @@ readonly BATTERY_MODEL_ESTIMATOR_MARGIN_PERCENT=15
 # used, which is the estimator that degrades most gracefully when starved.
 readonly BATTERY_MODEL_ESTIMATOR_MIN_SCORED=8
 readonly BATTERY_MODEL_DEFAULT_ESTIMATOR="median"
-readonly BATTERY_MODEL_ESTIMATOR_HEADER=$'# battery-estimators\tv1'
 # A window whose average draw falls outside this range is rejected as noise
 # (a suspend, a hot-swapped battery, or a sysfs counter that jumped).
 readonly BATTERY_MODEL_MIN_DRAW_MW=100
 readonly BATTERY_MODEL_MAX_DRAW_MW=120000
-
-# Schema history. Version 2 added the identity of the battery set a window was
-# measured on. Version 3 replaced the pack-level row with one row per battery,
-# carrying that battery's own draw and its full metric set, because a
-# projection for a cell must be built from that cell's own evidence.
-#
-# Version 1 and 2 rows stay readable, but they describe a pack rather than a
-# battery, so they can never be attributed to one. They are reported as legacy
-# and never modelled.
-# Legacy generation (superseded by ADR-0001). Read-only from here on: no new
-# row is ever written under these headers again.
-readonly BATTERY_MODEL_HISTORY_HEADER=$'# battery-discharge-history\tv3'
-readonly BATTERY_MODEL_HISTORY_HEADER_V2=$'# battery-discharge-history\tv2'
-readonly BATTERY_MODEL_HISTORY_HEADER_V1=$'# battery-discharge-history\tv1'
 
 # --- Raw-observation tier (ADR-0001) ----------------------------------------
 #
@@ -162,10 +145,10 @@ battery_raw_uptime_seconds() {
 readonly BATTERY_STATE_SCHEMA_VERSION=2
 
 # --- Loaded history --------------------------------------------------------
-# battery_model_load_history() reads the file once and indexes every window by
-# the battery that measured it. battery_model_select_battery() then narrows the
-# working set to one battery, because a projection for a given cell must use
-# only that cell's own evidence.
+# battery_model_load_windows() (below) reads windows.tsv once and indexes
+# every window by the battery that measured it. battery_model_select_battery()
+# then narrows the working set to one battery, because a projection for a
+# given cell must use only that cell's own evidence.
 
 battery_model_state=""               # missing | unsupported | ready
 battery_model_history_version=0
@@ -187,39 +170,6 @@ battery_model_draws=()               # selected battery's draws, ascending
 battery_model_draws_ordered=()       # the same draws, oldest first
 battery_model_recent_draws=()        # newest BATTERY_MODEL_RECENT_WINDOWS
 
-battery_model_history_valid() {
-  local first_line
-  [[ -f "$1" ]] || return 1
-  # Read the header in bash rather than forking `head`: the view calls this on
-  # every panel refresh.
-  IFS= read -r first_line <"$1" 2>/dev/null || return 1
-  case $first_line in
-  "$BATTERY_MODEL_HISTORY_HEADER") return 0 ;;
-  "$BATTERY_MODEL_HISTORY_HEADER_V2") return 0 ;;
-  "$BATTERY_MODEL_HISTORY_HEADER_V1") return 0 ;;
-  esac
-  return 1
-}
-
-# 3, 2, 1, or 0 when the file is missing or in a format this version cannot read.
-battery_model_history_format() {
-  local first_line
-  [[ -f "$1" ]] || {
-    printf '0'
-    return 0
-  }
-  IFS= read -r first_line <"$1" 2>/dev/null || {
-    printf '0'
-    return 0
-  }
-  case $first_line in
-  "$BATTERY_MODEL_HISTORY_HEADER") printf '3' ;;
-  "$BATTERY_MODEL_HISTORY_HEADER_V2") printf '2' ;;
-  "$BATTERY_MODEL_HISTORY_HEADER_V1") printf '1' ;;
-  *) printf '0' ;;
-  esac
-}
-
 # Sort a numeric array in place, ascending. Insertion sort with no subprocess:
 # the history file is capped per battery, so this is always cheaper than
 # forking `sort`.
@@ -233,74 +183,6 @@ battery_model_sort_numbers() {
     done
     _bm_array[probe + 1]=$candidate
   done
-}
-
-# Read the discharge history once and index it by battery.
-# Usage: battery_model_load_history HISTORY_FILE NOW_EPOCH
-battery_model_load_history() {
-  local history_file=$1 now=$2
-  local kind epoch key draw session energy_full cycles
-
-  battery_model_state="missing"
-  battery_model_total_rows=0
-  battery_model_future_rows=0
-  battery_model_legacy_rows=0
-  battery_model_keys=()
-  battery_model_key_draws=()
-  battery_model_key_sessions=()
-  battery_model_key_last=()
-  battery_model_key_energy_full=()
-  battery_model_key_cycles=()
-  battery_model_select_battery ""
-
-  [[ -f "$history_file" ]] || return 0
-  battery_model_history_version=$(battery_model_history_format "$history_file")
-  if ((battery_model_history_version == 0)); then
-    battery_model_state="unsupported"
-    return 0
-  fi
-  battery_model_state="ready"
-
-  while IFS=$'\t' read -r kind epoch key draw session energy_full cycles; do
-    case $kind in
-    D)
-      if [[ -z ${battery_model_key_draws[$key]+x} ]]; then
-        battery_model_keys+=("$key")
-        battery_model_key_draws["$key"]=""
-        battery_model_key_sessions["$key"]=""
-      fi
-      battery_model_key_draws["$key"]+="$draw "
-      battery_model_key_sessions["$key"]+="$session "
-      battery_model_key_last["$key"]=$epoch
-      battery_model_key_energy_full["$key"]=$energy_full
-      battery_model_key_cycles["$key"]=$cycles
-      ;;
-    S)
-      battery_model_total_rows=$epoch
-      battery_model_future_rows=$key
-      battery_model_legacy_rows=$draw
-      ;;
-    esac
-  done < <(
-    awk -F '\t' -v now="$now" -v lookback="$BATTERY_MODEL_LOOKBACK_SECONDS" \
-      -v version="$battery_model_history_version" '
-      BEGIN { cutoff = now - lookback; total = future = legacy = 0 }
-      /^#/ { next }
-      $1 !~ /^[0-9]+$/ { next }
-      {
-        total++
-        if ($1 > now) { future++; next }
-        if ($1 < cutoff) next
-        # Schema 1 and 2 record one row per pack, with no battery identity, so
-        # they can never be attributed to a cell. They are counted and reported,
-        # never modelled.
-        if (version < 3) { legacy++; next }
-        if ($3 == "" || $4 !~ /^[1-9][0-9]*$/) next
-        printf "D\t%s\t%s\t%s\t%s\t%s\t%s\n", $1, $3, $4, $2, $6, $11
-      }
-      END { printf "S\t%d\t%d\t%d\t\t\t\n", total, future, legacy }
-    ' "$history_file"
-  )
 }
 
 # Narrow the working set to one battery. Every projection is made from the
@@ -342,10 +224,9 @@ battery_model_select_battery() {
 
 # --- Loading windows.tsv / gaps.tsv / battery-state.tsv (ADR-0001) ---------
 #
-# Reads the current-generation files the raw extractor produces. Populates the
-# same battery_model_key_* globals battery_model_load_history() does, so
-# battery_model_select_battery() and everything built on it works unchanged
-# regardless of which generation fed it.
+# Reads the current-generation files the raw extractor produces, into the
+# battery_model_key_* globals declared above, so battery_model_select_battery()
+# and everything built on it needs no changes to work from this generation.
 
 battery_model_windows_total_rows=0
 battery_model_windows_future_rows=0
@@ -670,41 +551,6 @@ battery_model_estimator_draw() {
     battery_model_median battery_model_draws
     ;;
   esac
-}
-
-# --- Selected estimators ---------------------------------------------------
-#
-# Scoring is far too expensive to repeat on every panel refresh, and the answer
-# changes at most once per completed window. The tracker scores each battery
-# when it records a window and writes the choice here; every reader just looks
-# it up. That keeps the cost on the 15-minute path instead of the 5-second one.
-
-declare -A battery_model_estimator=()
-declare -A battery_model_estimator_error=()
-declare -A battery_model_estimator_scored=()
-
-battery_model_load_estimators() {
-  local store=$1 first_line key estimator scored mean chosen
-  battery_model_estimator=()
-  battery_model_estimator_error=()
-  battery_model_estimator_scored=()
-  [[ -f "$store" ]] || return 0
-  IFS= read -r first_line <"$store" 2>/dev/null || return 0
-  [[ $first_line == "$BATTERY_MODEL_ESTIMATOR_HEADER" ]] || return 0
-  while IFS=$'\t' read -r key estimator scored mean chosen; do
-    [[ -n $key && -n $estimator ]] || continue
-    [[ $key == \#* ]] && continue
-    battery_model_estimator["$key"]=$estimator
-    battery_model_estimator_scored["$key"]=${scored:-0}
-    battery_model_estimator_error["$key"]=${mean:-0}
-  done <"$store"
-}
-
-# The estimator a battery projects with: its own selection, or the default when
-# it has never been scored.
-battery_model_estimator_for() {
-  local key=$1
-  printf '%s' "${battery_model_estimator[$key]:-$BATTERY_MODEL_DEFAULT_ESTIMATOR}"
 }
 
 # --- Gate ------------------------------------------------------------------

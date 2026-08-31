@@ -15,19 +15,22 @@ const {
   KEY_BAT0,
   KEY_BAT1,
   KEY_RETIRED,
-  HISTORY_HEADER_V2,
   installBattery,
   writeBattery,
   writeMains,
-  writeHistory,
-  writeEstimators,
-  windowsFor,
-  historyRow,
+  writeWindows,
+  windowsForBattery,
+  windowRow,
+  writeBatteryState,
+  batteryStateRow,
   runView,
 } = require("./support/battery");
 
 const NOW = 20000000;
 
+// The real fields the tracker writes today (ADR-0001): session bookkeeping
+// only. Sampling-window state and the selected estimator live in
+// battery-state.tsv now, not here.
 function writeState(stateDir, fields = {}) {
   const values = {
     state_schema_version: 2,
@@ -35,9 +38,10 @@ function writeState(stateDir, fields = {}) {
     state_since: 19999000,
     state_since_at_least: 0,
     last_observed: 19999990,
-    discharge_session_id: 19999000,
-    window_start_epoch: 19999550,
-    window_reset_reason: "''",
+    last_charge_start: 0,
+    last_charge_end: 0,
+    charge_start_levels: "''",
+    charge_session_valid: 0,
     battery_fingerprint: "BAT0:energy:50000000",
     ...fields,
   };
@@ -222,9 +226,9 @@ describe("per-battery models", () => {
     // Then each is projected from its own windows, never from the other's
     withView((f) => {
       machine(f);
-      writeHistory(f.state, [
-        ...windowsFor(KEY_BAT1, { count: 12, drawMw: 10000, start: 19990000 }),
-        ...windowsFor(KEY_BAT0, { count: 12, drawMw: 4000, start: 19991000 }),
+      writeWindows(f.state, [
+        ...windowsForBattery(KEY_BAT1, { count: 12, drawMw: 10000, start: 19990000 }),
+        ...windowsForBattery(KEY_BAT0, { count: 12, drawMw: 4000, start: 19991000 }),
       ]);
 
       const document = view(f);
@@ -243,9 +247,9 @@ describe("per-battery models", () => {
     // its parts added together.
     withView((f) => {
       machine(f);
-      writeHistory(f.state, [
-        ...windowsFor(KEY_BAT1, { count: 12, drawMw: 10000, start: 19990000 }),
-        ...windowsFor(KEY_BAT0, { count: 12, drawMw: 4000, start: 19991000 }),
+      writeWindows(f.state, [
+        ...windowsForBattery(KEY_BAT1, { count: 12, drawMw: 10000, start: 19980000 }),
+        ...windowsForBattery(KEY_BAT0, { count: 12, drawMw: 4000, start: 19981000 }),
       ]);
       const document = view(f);
       assert.equal(document.model.remaining_seconds, 4680 + 7200);
@@ -259,7 +263,7 @@ describe("per-battery models", () => {
     // Then the other is still learning and contributes nothing to the pack
     withView((f) => {
       machine(f);
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 12, drawMw: 10000 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 12, drawMw: 10000 }));
       const document = view(f);
       assert.equal(byName(document, "BAT0").projection.state, "learning");
       assert.equal(byName(document, "BAT0").projection.remaining_seconds, 0);
@@ -272,7 +276,7 @@ describe("per-battery models", () => {
   test("offers a provisional estimate before the full gate", () => {
     withView((f) => {
       machine(f);
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 5, sessions: 1 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 5, sessions: 1 }));
       assert.equal(byName(view(f), "BAT1").projection.state, "provisional");
     });
   });
@@ -280,7 +284,7 @@ describe("per-battery models", () => {
   test("says nothing at all below the provisional gate", () => {
     withView((f) => {
       machine(f);
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 3, sessions: 1 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 3, sessions: 1 }));
       const bat1 = byName(view(f), "BAT1");
       assert.equal(bat1.projection.state, "learning");
       assert.equal(bat1.projection.typical_draw_mw, 0);
@@ -291,9 +295,9 @@ describe("per-battery models", () => {
   test("reports a band whose low edge comes from the heavier draw", () => {
     withView((f) => {
       machine(f);
-      writeHistory(
+      writeWindows(
         f.state,
-        windowsFor(KEY_BAT1, {
+        windowsForBattery(KEY_BAT1, {
           count: 12,
           drawMw: (index) => 8000 + index * 500,
         }),
@@ -312,32 +316,34 @@ describe("per-battery models", () => {
         energy_now: 0,
       });
       writeState(f.state);
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 12 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 12 }));
       assert.equal(view(f).batteries[0].projection.state, "blocked-energy");
     });
   });
 
-  test("refuses a history schema it does not know", () => {
+  test("refuses a windows.tsv it does not recognise", () => {
     withView((f) => {
       machine(f);
-      writeHistory(f.state, [], "# battery-discharge-history\tv99");
+      writeWindows(f.state, [], "# battery-windows\tv99.0.0");
       const document = view(f);
       assert.equal(document.history.state, "unsupported");
       assert.equal(document.model.state, "unavailable");
     });
   });
 
-  test("counts pack-level rows from an older schema as unusable", () => {
+  test("counts windows that spanned an interruption as ineligible, not evidence", () => {
+    // A window marked eligible=0 by the extractor is retained for
+    // reconstruction (ADR-0001) but must never reach a projection.
     withView((f) => {
       machine(f);
-      writeHistory(
-        f.state,
-        ["19990000\ts0\t9000\t26000000", "19990001\ts0\t9100\t26000000"],
-        HISTORY_HEADER_V2,
-      );
+      writeWindows(f.state, [
+        ...windowsForBattery(KEY_BAT1, { count: 10, drawMw: 10000, start: 19990000 }),
+        windowRow({ epoch: 19999000, key: KEY_BAT1, drawMw: 50000, eligible: 0 }),
+        windowRow({ epoch: 19999900, key: KEY_BAT1, drawMw: 50000, eligible: 0 }),
+      ]);
       const document = view(f);
-      assert.equal(document.history.legacy, 2);
-      assert.equal(document.batteries[0].projection.windows, 0);
+      assert.equal(document.history.ineligible, 2);
+      assert.equal(byName(document, "BAT1").projection.windows, 10);
     });
   });
 });
@@ -354,9 +360,9 @@ describe("batteries that are no longer installed", () => {
         energy_now: 13000000,
       });
       writeState(f.state);
-      writeHistory(f.state, [
-        ...windowsFor(KEY_RETIRED, { count: 10, drawMw: 3000, start: 19990000 }),
-        ...windowsFor(KEY_BAT1, { count: 12, drawMw: 10000, start: 19991000 }),
+      writeWindows(f.state, [
+        ...windowsForBattery(KEY_RETIRED, { count: 10, drawMw: 3000, start: 19980000 }),
+        ...windowsForBattery(KEY_BAT1, { count: 12, drawMw: 10000, start: 19981000 }),
       ]);
 
       const document = view(f);
@@ -373,7 +379,7 @@ describe("batteries that are no longer installed", () => {
     withView((f) => {
       installBattery(f.root, BAT1, { status: "Discharging" });
       writeState(f.state);
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 6 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 6 }));
       assert.deepEqual(view(f).absent_batteries, []);
     });
   });
@@ -390,12 +396,12 @@ describe("estimator selection in the view", () => {
         energy_now: 13000000,
       });
       writeState(f.state);
-      writeHistory(f.state, [
-        ...windowsFor(KEY_BAT1, { count: 11, drawMw: 5000, start: 19990000 }),
-        historyRow({ epoch: 19990500, key: KEY_BAT1, session: "late", drawMw: 20000 }),
+      writeWindows(f.state, [
+        ...windowsForBattery(KEY_BAT1, { count: 11, drawMw: 5000, start: 19990000 }),
+        windowRow({ epoch: 19999500, sessionEpoch: 19990000, key: KEY_BAT1, drawMw: 20000 }),
       ]);
-      writeEstimators(f.state, [
-        { key: KEY_BAT1, estimator: "last", meanError: 250 },
+      writeBatteryState(f.state, [
+        batteryStateRow({ key: KEY_BAT1, estimator: "last", scored: 8, error: 250 }),
       ]);
 
       const model = view(f).batteries[0].projection;
@@ -412,7 +418,7 @@ describe("estimator selection in the view", () => {
         energy_now: 13000000,
       });
       writeState(f.state);
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 12, drawMw: 5000 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 12, drawMw: 5000 }));
       const model = view(f).batteries[0].projection;
       assert.equal(model.estimator, "median");
       assert.equal(model.typical_draw_mw, 5000);
@@ -434,7 +440,6 @@ describe("session and freshness", () => {
       assert.equal(document.power.state, "on-charge");
       assert.equal(document.power.state_since_at_least, true);
       assert.equal(document.power.charge_start_epoch, 19998000);
-      assert.equal(document.sampling.session_id, "19999000");
     });
   });
 
@@ -470,7 +475,7 @@ describe("session and freshness", () => {
           "usual_remaining_runtime_seconds=99999",
         ].join("\n") + "\n",
       );
-      writeHistory(f.state, windowsFor(KEY_BAT1, { count: 12, drawMw: 10000 }));
+      writeWindows(f.state, windowsForBattery(KEY_BAT1, { count: 12, drawMw: 10000 }));
       const document = view(f);
       assert.equal(document.energy.now_uwh, 13000000);
       assert.equal(document.batteries[0].projection.remaining_seconds, 4680);
