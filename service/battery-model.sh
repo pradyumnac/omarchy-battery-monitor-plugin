@@ -59,7 +59,7 @@ readonly BATTERY_MODEL_MAX_DRAW_MW=120000
 # Every file from here on is semver format-versioned, independent of the
 # legacy v1-v3 markers above. `FORMAT` describes how to parse a file; it is
 # bumped only when a column is added, removed, or reinterpreted.
-readonly BATTERY_RAW_FORMAT="v0.1.0"
+readonly BATTERY_RAW_FORMAT="v0.2.0"
 readonly BATTERY_WINDOWS_FORMAT="v0.1.0"
 readonly BATTERY_GAPS_FORMAT="v0.1.0"
 readonly BATTERY_STATE_TIER_FORMAT="v0.1.0"
@@ -68,7 +68,7 @@ readonly BATTERY_STATE_TIER_FORMAT="v0.1.0"
 # written (window length, draw formula, plausibility bounds, poll interval).
 # Bump this, not the format, when one of those constants changes — it lets a
 # reader tell rows apart without changing how the row is parsed.
-readonly BATTERY_RECORDING_RULES_VERSION="v0.1.0"
+readonly BATTERY_RECORDING_RULES_VERSION="v0.2.0"
 
 readonly BATTERY_RAW_HEADER="# battery-raw-observations	${BATTERY_RAW_FORMAT}"
 readonly BATTERY_WINDOWS_HEADER="# battery-windows	${BATTERY_WINDOWS_FORMAT}"
@@ -79,17 +79,25 @@ readonly BATTERY_STATE_TIER_HEADER="# battery-state	${BATTERY_STATE_TIER_FORMAT}
 # Columns after `capacity_control_end_threshold` mirror what sysfs publishes
 # for the battery; `ac_online`/`boot_id`/`suspend_count`/`uptime_s` are
 # machine-level facts repeated on every row (denormalized: a single battery's
-# file must be readable without joining to anything else).
+# file must be readable without joining to anything else). `power_profile`
+# and `load1` are the same kind of fact: they explain why a given draw was
+# what it was, which no battery-local column can.
+#
+# New columns are only ever APPENDED. A raw file is append-only and is never
+# rewritten, so a file written across a format bump holds rows of two widths.
+# Every reader keys on the column count, never on the header, and takes an
+# absent trailing column as "not recorded". See the state file reference.
 battery_raw_row() {
   local epoch=$1 trigger=$2 status=$3 energy_now=$4 energy_full=$5 \
     energy_full_design=$6 voltage_now=$7 power_now=$8 capacity=$9 \
     cycle_count=${10} end_threshold=${11} ac_online=${12} boot_id=${13} \
-    suspend_count=${14} uptime_s=${15}
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    suspend_count=${14} uptime_s=${15} power_profile=${16-} load1=${17-}
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$epoch" "$trigger" "$BATTERY_RECORDING_RULES_VERSION" "$status" \
     "$energy_now" "$energy_full" "$energy_full_design" "$voltage_now" \
     "$power_now" "$capacity" "$cycle_count" "$end_threshold" \
-    "$ac_online" "$boot_id" "$suspend_count" "$uptime_s"
+    "$ac_online" "$boot_id" "$suspend_count" "$uptime_s" \
+    "${power_profile:-unknown}" "${load1:-0}"
 }
 
 # Sanitize a battery key for use as a directory name: replace only what the
@@ -124,6 +132,39 @@ battery_raw_uptime_seconds() {
   uptime=${uptime%% *}
   uptime=${uptime%%.*}
   [[ $uptime =~ ^[0-9]+$ ]] && printf '%s' "$uptime" || printf '0'
+}
+
+# The 1-minute load average, scaled by 100 and stored as an integer, so the
+# raw tier stays free of locale-dependent decimal separators. 2.30 -> 230.
+battery_raw_load1_centi() {
+  local load=""
+  [[ -f /proc/loadavg ]] && load=$(</proc/loadavg)
+  load=${load%% *}
+  local whole=${load%%.*} fraction=${load#*.}
+  [[ $whole =~ ^[0-9]+$ ]] || { printf '0'; return; }
+  [[ $fraction =~ ^[0-9]+$ ]] || fraction=0
+  fraction=${fraction}00
+  printf '%s' $((whole * 100 + 10#${fraction:0:2}))
+}
+
+# The active platform power profile, or "unknown" when the machine exposes
+# none. The ACPI node is a plain file read and costs no fork, so it is tried
+# first; `powerprofilesctl` is a D-Bus round trip and is only reached on
+# hardware without the node (the T480 among them). The call is wrapped in a
+# timeout because a hung D-Bus service must not stall a poll: a lost profile
+# reading costs one column, a stalled poll costs the liveness row.
+battery_raw_power_profile() {
+  local profile="" node="${BATTERY_PLATFORM_PROFILE_NODE:-/sys/firmware/acpi/platform_profile}"
+  if [[ -r $node ]]; then
+    profile=$(<"$node")
+  else
+    local command=${BATTERY_POWER_PROFILE_COMMAND:-powerprofilesctl}
+    if command -v -- "$command" >/dev/null 2>&1; then
+      profile=$(timeout 2 "$command" get 2>/dev/null || true)
+    fi
+  fi
+  profile=${profile//[$'\t\n\r']/}
+  printf '%s' "${profile:-unknown}"
 }
 
 

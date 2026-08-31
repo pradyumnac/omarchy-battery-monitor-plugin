@@ -42,6 +42,12 @@ source "$service_dir/battery-model.sh"
 ac_online=0
 ac_mains_online && ac_online=1
 
+# Machine-level facts read once per poll, not once per battery: they are
+# properties of the machine, so reading them per battery would fork twice on
+# a dual-battery laptop and could still disagree between the two rows.
+poll_power_profile=$(battery_raw_power_profile)
+poll_load1_centi=$(battery_raw_load1_centi)
+
 # Do not create a fake battery session on desktops.
 battery_dirs=()
 for battery_dir in "$power_supply_root"/BAT*; do
@@ -201,7 +207,7 @@ append_raw_row() {
       "$energy_full_design" "$voltage_now" "$power_now" "$capacity" \
       "$cycle_count" "$end_threshold" "$ac_online" \
       "$(battery_raw_boot_id)" "$(battery_raw_suspend_count)" \
-      "$(battery_raw_uptime_seconds)"
+      "$(battery_raw_uptime_seconds)" "$poll_power_profile" "$poll_load1_centi"
   } >>"$file"
 }
 

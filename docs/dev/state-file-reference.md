@@ -93,8 +93,8 @@ forbids. This is not a privacy boundary. See
 date, append-only, never edited or pruned.
 
 ```text
-# battery-raw-observations<TAB>v0.1.0
-<epoch><TAB><trigger><TAB><rules><TAB><status><TAB><energy_now_uwh><TAB><energy_full_uwh><TAB><energy_full_design_uwh><TAB><voltage_now_uv><TAB><power_now_uw><TAB><capacity_percent><TAB><cycle_count><TAB><end_threshold_percent><TAB><ac_online><TAB><boot_id><TAB><suspend_count><TAB><uptime_seconds>
+# battery-raw-observations<TAB>v0.2.0
+<epoch><TAB><trigger><TAB><rules><TAB><status><TAB><energy_now_uwh><TAB><energy_full_uwh><TAB><energy_full_design_uwh><TAB><voltage_now_uv><TAB><power_now_uw><TAB><capacity_percent><TAB><cycle_count><TAB><end_threshold_percent><TAB><ac_online><TAB><boot_id><TAB><suspend_count><TAB><uptime_seconds><TAB><power_profile><TAB><load1_centi>
 ```
 
 A row is written every poll, unconditionally — the poll row is the liveness
@@ -112,8 +112,35 @@ one of:
 (window length, draw formula, plausibility bounds, poll interval) — distinct
 from the file's own format version, which describes how to parse the row.
 Machine-level facts (`ac_online`, `boot_id`, `suspend_count`,
-`uptime_seconds`) are repeated on every row rather than normalized into a
-separate file, so one battery's raw file is independently readable.
+`uptime_seconds`, `power_profile`, `load1_centi`) are repeated on every row
+rather than normalized into a separate file, so one battery's raw file is
+independently readable.
+
+`power_profile` and `load1_centi` explain a draw that no battery-local column
+can: the same pack under `performance` and under `power-saver` reports the
+same energy and a different rate. `power_profile` is `unknown` on a machine
+that exposes none. `load1_centi` is the 1-minute load average multiplied by
+100 and stored as an integer, so the file holds no locale-dependent decimal
+separator.
+
+### Rows of two widths in one file
+
+A raw file is append-only and is never rewritten, so a file written across a
+format change holds rows of both widths. A v0.1.0 row has 16 columns and a
+v0.2.0 row has 18.
+
+Read every raw file by the column count, never by the header. The header
+names the format the file started in, not the format of every row in it. New
+columns are only ever appended, so a reader that guards each access to a
+trailing column keeps working across a bump:
+
+```awk
+profile = (NF >= 17) ? $17 : ""
+```
+
+Treat an absent trailing column as "never recorded", not as zero. A row
+written before the upgrade did not lose those facts and did not measure them
+as zero.
 
 Rotation is implicit: the local date is the filename, so a new day needs no
 rotation logic. Nothing is ever pruned.
@@ -203,6 +230,8 @@ see [ADR-0001](../adr/0001-raw-observation-tier.md).
 | `make reextract` | Rebuild tiers 2 and 3 from raw and diff. Changes nothing |
 | `make reextract FORCE=1` | Rebuild tiers 2 and 3 and replace the live files |
 | `make export` | Bundle every tier and a manifest into one zip |
+| `make graph-charge` | Plot capacity over time, with power events, profile, and load |
+| `make graph-health` | Plot reported capacity against design capacity over time |
 
 ## Constants
 
@@ -226,11 +255,12 @@ elsewhere; never write the number.
 | `BATTERY_MODEL_MIN_DRAW_MW` | 100 | Lower plausibility bound |
 | `BATTERY_MODEL_MAX_DRAW_MW` | 120000 | Upper plausibility bound |
 
-Format versions are separate. `BATTERY_RAW_FORMAT`, `BATTERY_WINDOWS_FORMAT`,
-`BATTERY_GAPS_FORMAT`, and `BATTERY_STATE_TIER_FORMAT` are each `v0.1.0` and
-describe how to parse a file. `BATTERY_RECORDING_RULES_VERSION` is `v0.1.0`
-and records which recording rules were in force. `BATTERY_STATE_SCHEMA_VERSION`
-is `2` and describes the `state` file.
+Format versions are separate. `BATTERY_RAW_FORMAT` is `v0.2.0`;
+`BATTERY_WINDOWS_FORMAT`, `BATTERY_GAPS_FORMAT`, and
+`BATTERY_STATE_TIER_FORMAT` are each `v0.1.0`. Each one describes how to parse
+a file. `BATTERY_RECORDING_RULES_VERSION` is `v0.2.0` and records which
+recording rules were in force. `BATTERY_STATE_SCHEMA_VERSION` is `2` and
+describes the `state` file.
 
 Retention is not a constant. The model reads the lookback window at read time.
 No file is pruned.

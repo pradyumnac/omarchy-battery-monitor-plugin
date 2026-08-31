@@ -9,3 +9,9 @@ state/
 HANDOFF.md
 AGENTS.md
 .scratch/
+
+# Charts written by `make graph-charge` / `make graph-health` into the checkout.
+*-charge.svg
+*-health.svg
+*-charge.png
+*-health.png

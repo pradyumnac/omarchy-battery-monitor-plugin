@@ -19,6 +19,7 @@ const statusScript = path.join(
 );
 const backtestScript = path.join(repository, "scripts", "battery-backtest.sh");
 const exportScript = path.join(repository, "scripts", "battery-export.sh");
+const graphScript = path.join(repository, "scripts", "battery-graph.sh");
 const reextractScript = path.join(repository, "scripts", "battery-reextract.sh");
 
 // ADR-0001 generation: the files the tracker actually writes today.
@@ -97,8 +98,13 @@ function rawRow({
   bootId = "boot-a",
   suspendCount = 0,
   uptimeSeconds = 1000,
+  // Raw format v0.2.0 appended these two. Leaving them undefined produces a
+  // 16-column v0.1.0 row, which every reader must still parse - raw files are
+  // append-only, so a file written across the bump holds both widths.
+  powerProfile,
+  load1Centi,
 } = {}) {
-  return [
+  const columns = [
     epoch,
     trigger,
     rules,
@@ -115,7 +121,11 @@ function rawRow({
     bootId,
     suspendCount,
     uptimeSeconds,
-  ].join("\t");
+  ];
+  if (powerProfile !== undefined || load1Centi !== undefined) {
+    columns.push(powerProfile ?? "unknown", load1Centi ?? 0);
+  }
+  return columns.join("\t");
 }
 
 // Write one battery's raw file for one local date. `date` defaults to a
@@ -335,6 +345,7 @@ module.exports = {
   statusScript,
   backtestScript,
   exportScript,
+  graphScript,
   reextractScript,
   modelLibrary,
   // The files the tracker actually writes today (ADR-0001).

@@ -92,9 +92,16 @@ describe("the export archive", () => {
         "energy_full_uwh", "energy_full_design_uwh", "voltage_now_uv",
         "power_now_uw", "capacity_percent", "cycle_count",
         "end_threshold_percent", "ac_online", "boot_id", "suspend_count",
-        "uptime_seconds",
+        "uptime_seconds", "power_profile", "load_1min", "health_percent",
       ].join(","));
       assert.equal(lines.length, 7); // header + 6 polls
+
+      // These rows are v0.1.0, which never recorded profile or load. They
+      // must export empty, not as a zero a notebook would read as real.
+      const header = lines[0].split(",");
+      const first = lines[1].split(",");
+      assert.equal(first[header.indexOf("power_profile")], "");
+      assert.equal(first[header.indexOf("load_1min")], "");
     });
   });
 
@@ -126,7 +133,8 @@ describe("the export archive", () => {
         fs.readFileSync(path.join(dir, "manifest.json"), "utf8"),
       );
       assert.equal(manifest.windows_format, "v0.1.0");
-      assert.equal(manifest.raw_format, "v0.1.0");
+      // The raw tier gained power_profile and load1; the derived tiers did not.
+      assert.equal(manifest.raw_format, "v0.2.0");
       assert.ok(manifest.generated_at_utc);
       assert.ok(manifest.host);
       assert.ok(manifest.user);

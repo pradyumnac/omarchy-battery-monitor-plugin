@@ -27,6 +27,11 @@ depends=(
 
 optdepends=(
   'libnotify: desktop notifications on plug and unplug'
+  # make graph-charge / graph-health render SVG with awk alone. These two
+  # only turn that SVG into a picture in the terminal; FORMAT=svg needs
+  # neither, so neither belongs in depends.
+  'librsvg: rasterize a chart for make graph-charge / graph-health'
+  'chafa: show a chart in the terminal for make graph-charge / graph-health'
 )
 
 makedepends=()

@@ -97,14 +97,20 @@ csv_from_raw() {
         "energy_now_uwh", "energy_full_uwh", "energy_full_design_uwh",
         "voltage_now_uv", "power_now_uw", "capacity_percent", "cycle_count",
         "end_threshold_percent", "ac_online", "boot_id", "suspend_count",
-        "uptime_seconds"
+        "uptime_seconds", "power_profile", "load_1min", "health_percent"
     }
     /^#/ { next }
     NF < 15 { next }
     {
+      # Columns 17 and 18 arrived with raw format v0.2.0. A row written before
+      # it never recorded them, so they export empty rather than as a zero
+      # that a notebook would read as a real measurement.
+      profile = (NF >= 17) ? csv($17) : ""
+      load1 = (NF >= 18) ? sprintf("%.2f", $18 / 100.0) : ""
+      health = ($7 > 0) ? ($6 * 100.0 / $7) : ""
       print strftime("%Y-%m-%dT%H:%M:%S", $1), $1, csv($2), csv($3), csv($4),
         $5, $6, $7, $8, $9, $10, $11, $12, ($13 == 1 ? "true" : "false"),
-        csv($14), $15, $16
+        csv($14), $15, $16, profile, load1, health
     }
   ' "$1"
 }

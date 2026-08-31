@@ -14,6 +14,8 @@ monitor_command="${BATTERY_SESSION_MONITOR_COMMAND:-upower}"
 awk_command="${BATTERY_SESSION_AWK_COMMAND:-awk}"
 zip_command="${BATTERY_SESSION_ZIP_COMMAND:-zip}"
 notification_command="${BATTERY_SESSION_NOTIFY_COMMAND:-omarchy-notification-send}"
+rsvg_command="${BATTERY_GRAPH_RSVG_COMMAND:-rsvg-convert}"
+chafa_command="${BATTERY_GRAPH_CHAFA_COMMAND:-chafa}"
 
 hard_failures=0
 report=()
@@ -106,6 +108,47 @@ if command -v -- "$notification_command" >/dev/null 2>&1; then
 else
   check_warn "$notification_command not found; sessions will still be recorded but no desktop notifications will be sent"
 fi
+
+# --- Graph toolchain (optional) ---------------------------------------------
+#
+# `make graph-charge` and `make graph-health` render SVG, which needs nothing
+# beyond awk. Rasterizing and showing that SVG in this terminal needs two more
+# tools. None of it is a hard requirement: the tracker records the same data
+# either way, and `FORMAT=svg` writes a document that opens anywhere. So every
+# check below warns and none of them blocks an install.
+if command -v -- "$rsvg_command" >/dev/null 2>&1; then
+  check_ok "$rsvg_command found (graphs)"
+else
+  check_warn "$rsvg_command not found (package: librsvg); needed to rasterize a chart. \`make graph-charge FORMAT=svg\` still works without it"
+fi
+
+if command -v -- "$chafa_command" >/dev/null 2>&1; then
+  check_ok "$chafa_command found (graphs)"
+else
+  check_warn "$chafa_command not found (package: chafa); needed to show a chart in this terminal. \`make graph-charge FORMAT=svg\` still works without it"
+fi
+
+# Which image protocol this terminal can take. chafa probes for itself at run
+# time and falls back to Unicode block art when a terminal supports none, so
+# this is a report on the quality to expect, never a requirement.
+graph_terminal="${TERM_PROGRAM:-}"
+[[ -n ${GHOSTTY_RESOURCES_DIR-} ]] && graph_terminal=ghostty
+[[ -n ${KITTY_WINDOW_ID-} ]] && graph_terminal=kitty
+[[ -z $graph_terminal ]] && graph_terminal="${TERM:-unknown}"
+case $graph_terminal in
+ghostty | kitty | xterm-kitty | WezTerm | wezterm)
+  check_ok "terminal \"$graph_terminal\" supports the kitty graphics protocol; charts render as true images"
+  ;;
+foot | foot-extra | *sixel* | mlterm | xterm)
+  check_ok "terminal \"$graph_terminal\" supports sixel; charts render as images"
+  ;;
+alacritty | alacritty-direct)
+  check_warn "terminal \"$graph_terminal\" has no image protocol; charts fall back to Unicode block art. Use ghostty, kitty, or foot for a true image"
+  ;;
+*)
+  check_warn "cannot tell whether terminal \"$graph_terminal\" supports an image protocol; chafa decides at run time and falls back to Unicode block art"
+  ;;
+esac
 
 printf 'Battery session tracker preflight:\n'
 printf '%s\n' "${report[@]}"

@@ -1,12 +1,13 @@
 # shellcheck disable=all
-.PHONY: check test install uninstall uninstall-purge-data reload restart-shell status view backtest export reextract benchmark preflight doctor
+.PHONY: check test install uninstall uninstall-purge-data reload restart-shell status view backtest export reextract benchmark preflight doctor graph-charge graph-health
 
 PLUGIN_DIR ?= $(HOME)/.config/omarchy/plugins/doe.power
 export PLUGIN_DIR
 
 # Syntax and lint checks only. Run `make test` separately for the test suite.
 check:
-	@bash -n service/battery-session-tracker.sh service/battery-session-monitor.sh service/power-supply.sh service/battery-model.sh service/battery-view.sh scripts/battery-session-preflight.sh scripts/install-session-tracker.sh scripts/uninstall-session-tracker.sh scripts/plugin-files.sh scripts/battery-intelligence-status.sh scripts/battery-backtest.sh scripts/battery-export.sh scripts/battery-reextract.sh scripts/check-doc-links.sh
+	@bash -n service/battery-session-tracker.sh service/battery-session-monitor.sh service/power-supply.sh service/battery-model.sh service/battery-view.sh scripts/battery-session-preflight.sh scripts/install-session-tracker.sh scripts/uninstall-session-tracker.sh scripts/plugin-files.sh scripts/battery-intelligence-status.sh scripts/battery-backtest.sh scripts/battery-export.sh scripts/battery-graph.sh scripts/battery-reextract.sh scripts/check-doc-links.sh
+	@gawk -f scripts/battery-graph.awk </dev/null >/dev/null
 	@# Service executables exist only after `make install`; verify the static timer here.
 	@systemd-analyze verify service/battery-session-tracker.timer
 	@# The flags below are Qt6-only, so prefer the Qt6 binary explicitly —
@@ -92,6 +93,25 @@ backtest:
 # writes elsewhere.
 export:
 	@scripts/battery-export.sh $(DEST)
+
+# Plot collected data. Both targets render the same layout: the series, the
+# power events that explain its shape, and the power profile and system load
+# underneath. DAYS, BATTERY, FORMAT, OUT and THEME all pass through.
+#
+# The renderer emits SVG and needs nothing but awk. Showing it here needs
+# rsvg-convert and chafa, which are optional: `FORMAT=svg` writes the document
+# with no extra dependency, and `make doctor` reports the whole toolchain.
+graph-charge:
+	@scripts/battery-graph.sh --metric charge \
+		$(if $(DAYS),--days $(DAYS),) $(if $(BATTERY),--battery $(BATTERY),) \
+		$(if $(FORMAT),--format $(FORMAT),) $(if $(OUT),--out $(OUT),) \
+		$(if $(THEME),--theme $(THEME),)
+
+graph-health:
+	@scripts/battery-graph.sh --metric health \
+		$(if $(DAYS),--days $(DAYS),) $(if $(BATTERY),--battery $(BATTERY),) \
+		$(if $(FORMAT),--format $(FORMAT),) $(if $(OUT),--out $(OUT),) \
+		$(if $(THEME),--theme $(THEME),)
 
 # Rebuild windows.tsv, gaps.tsv, and battery-state.tsv from raw observations
 # and diff against the live files (ADR-0001). The tracker derives these
