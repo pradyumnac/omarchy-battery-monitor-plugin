@@ -80,15 +80,17 @@ status:
 view:
 	@service/battery-view.sh
 
-# Score the runtime model against the recorded history. No model change ships
-# without a measurable improvement here; see docs/research/.
+# Score the runtime model against the recorded windows. No model change ships
+# without a measurable improvement here; see docs/research/. `make backtest
+# WINDOWS=path/to/windows.tsv` scores a file other than the live one.
 backtest:
-	@scripts/battery-backtest.sh $(HISTORY)
+	@scripts/battery-backtest.sh $(WINDOWS)
 
-# Export the discharge history as CSV for analysis in a notebook.
-# `make export > battery-history.csv`
+# Bundle every tier of collected data (raw, windows, gaps, battery-state) into
+# one zip in ~/Downloads, for analysis in a notebook. `make export DEST=dir`
+# writes elsewhere.
 export:
-	@scripts/battery-export.sh $(HISTORY)
+	@scripts/battery-export.sh $(DEST)
 
 # Rebuild windows.tsv, gaps.tsv, and battery-state.tsv from raw observations
 # and diff against the live files (ADR-0001). The tracker derives these

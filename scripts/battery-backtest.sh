@@ -23,7 +23,7 @@
 # energy, so an error in draw is the whole error. Scoring draw keeps the
 # harness independent of how full the battery happened to be.
 #
-# Usage: battery-backtest.sh [HISTORY_FILE]
+# Usage: battery-backtest.sh [WINDOWS_FILE]
 # Exits 1 when no battery has enough history to hold anything out.
 
 set -uo pipefail
@@ -33,22 +33,17 @@ service_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../service" && pwd -P)"
 source "$service_dir/battery-model.sh"
 
 state_dir="${BATTERY_SESSION_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/battery-session}"
-history_file="${1:-$state_dir/discharge-history.tsv}"
+history_file="${1:-$state_dir/windows.tsv}"
 
 if [[ ! -f "$history_file" ]]; then
-  printf 'No discharge history at %s.\n' "$history_file" >&2
+  printf 'No windows recorded at %s.\n' "$history_file" >&2
   exit 1
 fi
-history_format=$(battery_model_history_format "$history_file")
-if ((history_format == 0)); then
-  printf 'Unsupported history format at %s.\n' "$history_file" >&2
-  exit 1
-fi
-if ((history_format < 3)); then
-  printf 'History at %s predates per-battery records (schema v%s).\n' \
-    "$history_file" "$history_format" >&2
-  printf 'There is nothing to score per battery. Collect windows on the\n' >&2
-  printf 'current schema first.\n' >&2
+first_line=""
+IFS= read -r first_line <"$history_file" 2>/dev/null || true
+if [[ "$first_line" != "$BATTERY_WINDOWS_HEADER" ]]; then
+  printf 'Unsupported windows format at %s.\n' "$history_file" >&2
+  printf 'Expected header: %s\n' "$BATTERY_WINDOWS_HEADER" >&2
   exit 1
 fi
 
@@ -58,8 +53,11 @@ warmup=${BATTERY_BACKTEST_WARMUP:-$BATTERY_MODEL_PROVISIONAL_WINDOWS}
 
 printf 'Backtest of %s\n\n' "$history_file"
 
+# $12 is `eligible`: a window that spanned a gap is retained in the file for
+# reconstruction (ADR-0001) but was never real evidence, so it is excluded
+# here exactly as the tracker excludes it from a live projection.
 mapfile -t battery_keys < <(
-  awk -F '\t' '!/^#/ && $3 != "" && $4 ~ /^[1-9][0-9]*$/ { print $3 }' \
+  awk -F '\t' '!/^#/ && $3 != "" && $4 ~ /^[1-9][0-9]*$/ && $12 == 1 { print $3 }' \
     "$history_file" | LC_ALL=C sort -u
 )
 if ((${#battery_keys[@]} == 0)); then
@@ -74,7 +72,7 @@ for battery_key in "${battery_keys[@]}"; do
   # never disagree about what "better" means.
   mapfile -t draws < <(
     awk -F '\t' -v want="$battery_key" \
-      '!/^#/ && $1 ~ /^[0-9]+$/ && $3 == want && $4 ~ /^[1-9][0-9]*$/ { print $1 "\t" $4 }' \
+      '!/^#/ && $1 ~ /^[0-9]+$/ && $3 == want && $4 ~ /^[1-9][0-9]*$/ && $12 == 1 { print $1 "\t" $4 }' \
       "$history_file" | LC_ALL=C sort -n -k1,1 | cut -f2
   )
 
