@@ -57,7 +57,8 @@ steps.
 | --- | --- |
 | `make view` | Print the aggregated view: the exact JSON document the panel reads |
 | `make backtest` | Score each battery's candidate estimators against its own held-out windows |
-| `make export` | Write the discharge history as CSV, for analysis in a notebook |
+| `make export` | Bundle raw observations, windows, gaps, and battery state into one zip, for analysis in a notebook |
+| `make reextract` | Rebuild windows/gaps/battery-state from raw and diff against the live files (`FORCE=1` to replace them) |
 | `make benchmark` | Measure what this plugin costs the battery it monitors |
 | `make doctor` | Check this machine can run the tracker, without installing anything |
 
@@ -81,7 +82,7 @@ steps.
 | --- | --- |
 | `Panel.qml`, `Model.js`, `manifest.json` | The Omarchy bar widget |
 | `service/` | The tracker, the monitor, the model rules, the aggregated view, and their systemd units — installed and run long-term |
-| `scripts/` | `install`/`uninstall`/`preflight`, plus `status`/`backtest`/`export` — one-shot, run by `make` |
+| `scripts/` | `install`/`uninstall`/`preflight`, plus `status`/`backtest`/`export`/`reextract` — one-shot, run by `make` |
 | `tests/` | Node test suite (`make test`) |
 | `docs/user/` | Goal-oriented user guides and user-facing explanations |
 | `docs/dev/` | Contributor explanations, reference, and verification specs |

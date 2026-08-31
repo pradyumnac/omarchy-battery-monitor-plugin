@@ -9,7 +9,7 @@ place and handed out as one versioned document.
 
 ```mermaid
 flowchart TD
-    SRC["sysfs · state file · discharge history"] --> CORE["battery-model.sh<br/>evidence gate · window arithmetic · projection"]
+    SRC["sysfs · state · raw/ · windows.tsv · gaps.tsv · battery-state.tsv"] --> CORE["battery-model.sh<br/>evidence gate · window arithmetic · projection"]
     CORE --> VIEW["battery-view.sh<br/>the aggregated view — the seam"]
     VIEW --> PANEL["Panel.qml<br/>one read"]
     VIEW --> STATUS["make status<br/>a renderer"]
@@ -97,14 +97,40 @@ minutes**.
 The tracker persists this distinction in `state_since_at_least`; see the
 [state file reference](state-file-reference.md#session-duration-confidence).
 
-## Battery intelligence
+## Raw observations, and one extractor
 
-The tracker samples aggregate `energy_now` while on battery. After 15
-continuous active minutes it records a discharge window in the versioned
-user-only history file. A polling gap beyond the tolerance, charging, energy
-increases, implausible draw, missing measurements, and battery-topology changes
-invalidate only the active window. The tracker records evidence; it computes no
-estimate.
+[ADR-0001](adr/0001-raw-observation-tier.md) is the design record for this
+section; this is the summary a contributor changing the tracker actually
+needs.
+
+Every poll, for every battery, appends one row to that battery's own
+`raw/<battery-key>/<date>.tsv` file — unconditionally, whether or not it
+completes a window. That row is the liveness proof: it is what lets a later
+gap be explained rather than merely noticed. A transition row (AC-online
+flip, or a battery's status string changing) is written the same way,
+filtered to real changes so a burst of duplicate UPower events collapses to
+one row.
+
+`battery_extract_windows()` in `service/battery-model.sh` turns raw rows into
+`windows.tsv` and `gaps.tsv`. It is called two ways — incrementally, on a
+bounded tail after every poll, and in batch, over the whole file, by
+`make reextract` — and both call sites run the identical function. This is
+the central guarantee of the whole design: window arithmetic, the
+threshold-hold rule, and battery-identity handling had each drifted between
+two implementations at different points before ADR-0001, and each drift
+shipped a bug. One function, two call sites, removes the possibility.
+
+Any two consecutive raw rows fully determine what happened between them.
+`boot_id` and `suspend_count` deltas classify a gap as `off`
+(shutdown/reboot/hibernate — a different boot), `asleep` (suspend — same
+boot, `suspend_count` increased), or `blind` (the machine was awake, the
+tracker was not running); a backward clock jump beyond ordinary NTP jitter
+classifies as `clock`. A window that spans a gap is written and flagged
+`eligible=0` — retained for reconstruction, never deleted, never counted as
+evidence. See the [state file reference](state-file-reference.md) for the
+column-level detail of all four tiers.
+
+The tracker records evidence; it computes no estimate.
 
 ### One model per battery
 
@@ -123,9 +149,9 @@ the system the other sits idle. So an idle battery records nothing for that
 window — a row of zeros would bury its real draw — and the pack figure is the
 sum of the per-battery projections.
 
-Retention is per battery too, at 96 windows each over 180 days, because a
-shared cap would let a heavily used cell evict the evidence of one swapped in
-only occasionally.
+Retention is a read-time interpretation, not a write-time row cap: nothing in
+`windows.tsv` is ever pruned, so a heavily used cell can never evict the
+evidence of one swapped in only occasionally by filling a shared cap.
 
 The view calculates from the most recent 30 days. A battery needs 12 windows
 across 3 discharge sessions to be `ready`, and 4 to offer a `provisional`
@@ -139,8 +165,8 @@ low edge.
 Several estimators compete: the median of its windows, the mean of its newest
 few, an exponentially weighted average, and the previous window alone. The
 tracker scores them against that battery's own held-out windows whenever it
-records one, and writes the winner to `estimators.tsv`; every reader looks the
-answer up.
+records one, and writes the winner to that battery's row in
+`battery-state.tsv`; every reader looks the answer up.
 
 The cost is deliberately placed on the 15-minute window-append path rather than
 the panel refresh, which reads the view every five seconds while open. Scoring
@@ -166,8 +192,10 @@ The report and the running model share one implementation,
 `battery_model_score_draws()`, so they cannot reach different verdicts. The
 report also states the selection the tracker would make.
 
-`make export` writes the same history as CSV, with identity split into columns,
-for exploring a question in a notebook before committing it to shell.
+`make export` bundles `windows.csv`, `gaps.csv`, `battery-state.tsv`, a
+manifest, and every battery's raw files into one zip, with identity split into
+columns, for exploring a question in a notebook before committing it to
+shell.
 
 ## Two scripts, one state file
 
@@ -204,23 +232,19 @@ field contract.
 
 ## Open edge cases
 
-These transitions aren't covered by a flow above because the current
-implementation doesn't define one. Treat them as backlog, not behavior —
-see [requirements spec](requirements-spec.md) for tracking.
+Suspend and shutdown gaps are handled now — see
+[gap classification](#raw-observations-and-one-extractor) above and
+[ADR-0001](adr/0001-raw-observation-tier.md). What is left is genuinely open,
+not just undocumented:
 
-- **Suspend / resume.** A gap beyond the poll tolerance produces a `> X` lower bound,
-  but a mains change followed by a return to the original state while suspended
-  cannot be reconstructed.
-- **Shutdown / poweroff mid-session.** No flush-on-shutdown path exists. On
-  restart, a gap beyond the poll tolerance produces `> X`; transitions that happened
-  while the tracker was stopped cannot be reconstructed.
+- **A mains change that happens entirely within a gap.** If the machine is
+  plugged in, suspended, unplugged, and resumed, the two raw rows bracketing
+  the gap disagree on `ac_online` but the gap itself carries no observation
+  of when the change happened. The gap is recorded and classified
+  correctly; the precise moment of the flip inside it is not recoverable.
 - **Last battery removed at runtime.** Status suppresses stale runtime when no
   present battery remains, and notifications report a mid-session removal.
   The panel's full desktop-mode fallback after the final runtime removal still
   needs real-hardware verification.
 
-Each of these is a data-consistency question: does the state file, on the
-next observation, correctly distinguish "stale from a gap" from "a real
-new session"? The same-state gap rule (see the state file reference) covers
-ordinary gaps; suspend and shutdown gaps can be much longer and need their own
-review before they're called handled.
+See [requirements spec](requirements-spec.md) for tracking.

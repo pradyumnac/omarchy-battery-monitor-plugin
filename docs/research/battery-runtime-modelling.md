@@ -244,7 +244,7 @@ error is flat across buckets there is nothing here.
 
 Scoring now runs continuously. The tracker rescores each battery against its
 own accumulating evidence whenever it records a window, and writes the winning
-estimator to `estimators.tsv`; the view projects with whatever that battery
+estimator to that battery's row in `battery-state.tsv`; the view projects with whatever that battery
 selected. `make backtest` renders the same scoring for a human and reports the
 selection it would make, so the report and the running model cannot tell
 different stories — both call `battery_model_score_draws()`.

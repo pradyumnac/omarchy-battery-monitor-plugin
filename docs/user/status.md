@@ -157,31 +157,37 @@ one `Pack runtime` line.
 
 ### When collection restarts
 
-A short warning explains why the active 15-minute sample restarted or paused:
+A short warning explains why a battery's active 15-minute sample most
+recently restarted:
 
 ```text
-Sampling: restarted · battery set changed
+Sampling: restarted · machine was suspended
 ```
 
-This does not discard earlier valid history. Common reasons:
+This does not discard earlier valid history — the interrupted window is kept
+on file, just never counted as evidence. The reason is a fact about what
+actually happened to the machine, not a guess:
 
 | Reason | Meaning |
 | --- | --- |
-| `battery set changed` | A different battery is installed than when the window opened |
-| `polling gap or clock change` | The tracker missed several polls, so the window cannot be trusted |
-| `per-battery baseline missing after upgrade` | The session began under an older build; the next window records normally |
-| `no battery measurably discharged` | The window elapsed with no cell giving up measurable energy |
-| `stored energy increased` | The battery gained charge mid-window |
-| `implausible draw rejected` | The measured draw was outside anything a laptop battery produces |
+| `machine was off (shutdown, reboot, or hibernate)` | A reboot happened between polls |
+| `machine was suspended` | The machine slept and resumed |
+| `the tracker was not running` | The machine stayed awake, but the collection service was down |
+| `the system clock changed` | The clock jumped backward beyond ordinary drift |
+
+Each battery reports its own most recent interruption, inside its own block.
+If two batteries were interrupted by the same machine-wide event (a suspend
+affects every battery at once), both blocks show it — deliberately not
+collapsed into one pack-level line, because each battery's evidence is
+tracked independently.
 
 ## Respond to warnings
 
 | Report state                                          | Meaning                                                                     | What to do                                                                                         |
 | ----------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `Model: blocked · this battery reports no capacity`   | Enough history exists, but that cell cannot provide the numerator            | Check `make status VERBOSE=1`; confirm the battery exposes compatible energy data                  |
-| `Model: unavailable · unsupported history format`     | The history file is from an unknown schema                                  | Keep the file for diagnosis; do not edit it in place                                               |
-| `Legacy rows: N pack-level row(s)`                    | History recorded before evidence was kept per battery                       | Nothing; those rows cannot be attributed to a cell and are ignored                                 |
-| `Battery identity: weak`                              | The firmware reports no serial, so identical spare batteries look alike      | Nothing to fix; evidence for such spares may be pooled together                                     |
+| `Model: unavailable · unsupported history format`     | `windows.tsv` is from an unknown schema                                     | Keep the file for diagnosis; do not edit it in place. `make reextract FORCE=1` rebuilds it from raw |
+| `Ineligible windows: N window(s) spanned an interruption` | A gap fell inside a discharge window while it was open                  | Nothing; the window is kept for diagnosis but never counted as evidence                            |
 | `Data: stale`                                         | The tracker has not refreshed state for several poll intervals              | Run `make install`, then inspect failed user services if the warning remains                       |
 | `Data: clock mismatch`                                | The recorded update is in the future relative to the current clock          | Correct the clock and wait for a tracker poll                                                      |
 | `Battery: not detected`                               | No present `BAT*` supply exists                                             | Reinsert a removable battery or verify `/sys/class/power_supply`                                   |
@@ -199,13 +205,16 @@ make status VERBOSE=1
 ```
 
 Verbose mode adds the state-file location, the view and state schema versions,
-retained/recent history counts, the last accepted model observation, the active
-session and window, and the battery-set key.
+retained/recent/future window counts, the last accepted model observation, and
+the battery fingerprint and set key. Each battery's own open sampling window
+is already shown in its block above (`Current sample`), not repeated here.
 
 Battery identity — vendor, model, and serial — is recorded, because evidence
 has to be anchored to the cell that produced it and capacity is not identity.
-It stays in your own state directory and is never transmitted. Application
-names and other personal data are still never collected.
+It stays in your own state directory (`raw/<battery-key>/`, `windows.tsv`,
+`gaps.tsv`, `battery-state.tsv`) and is never transmitted; anything that
+later shares it must ask first. Application names and other personal data are
+still never collected.
 
 For exhaustive field and state definitions, see the
 [status output reference](../dev/status-output-reference.md). For installation

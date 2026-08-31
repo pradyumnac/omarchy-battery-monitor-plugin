@@ -39,12 +39,16 @@ This doc is the single source of pending work. GitHub issues are archived
 | Unknown uninstall options fail before removing files | `tests/uninstall.test.js` |
 | Install and both uninstall targets perform a full shell restart | `tests/uninstall.test.js` |
 | Install refuses on a machine with no battery | `tests/preflight.test.js` |
-| A valid 15-minute discharge window is recorded | `tests/tracker.test.js` |
+| A valid 15-minute discharge window is recorded | `tests/tracker.test.js`, `tests/extract.test.js` |
 | Future-dated history is retained for diagnosis but excluded from learning | `tests/tracker.test.js`, `tests/intelligence-status.test.js` |
-| History is bounded to 96 rows per battery over 180 days | `tests/tracker.test.js` |
+| Retention is a read-time window over `windows.tsv`, not a write-time row cap | `tests/model-lib.test.js`, `tests/view.test.js` |
 | Invalid/discontinuous windows are rejected | `tests/tracker.test.js` |
 | Battery topology changes invalidate only the active window | `tests/tracker.test.js` |
-| Unknown history schemas are ignored safely | `tests/tracker.test.js` |
+| The incremental (per-poll) and batch (`make reextract`) extraction paths agree | `tests/extract.test.js` |
+| A gap is classified as `off`, `asleep`, `blind`, or `clock` from `boot_id`/`suspend_count`/wall-clock deltas | `tests/extract.test.js` |
+| A window spanning a gap is retained but never completes as evidence | `tests/extract.test.js` |
+| A fresh session immediately after a gap is always eligible | `tests/extract.test.js` |
+| Raw rows with too few columns or empty input are ignored rather than crashing the extractor | `tests/extract.test.js` |
 | `make status` renders a concise summary without systemd logs or raw state | `tests/intelligence-status.test.js` |
 | Learning, ready, blocked, unavailable, stale/cached, and clock states are distinct | `tests/intelligence-status.test.js` |
 | Charging, full, and charge-threshold hold use context-specific runtime labels | `tests/intelligence-status.test.js` |
@@ -66,11 +70,11 @@ This doc is the single source of pending work. GitHub issues are archived
 | Capacity recalibration does not restart sampling; an identity change does | `tests/tracker.test.js` |
 | A window with no per-battery baseline restarts and names the reason | `tests/tracker.test.js` |
 | An append is only claimed when a row was actually written | `tests/tracker.test.js` |
-| Pack-level rows from schema v1 and v2 are dropped on migration | `tests/tracker.test.js` |
+| A capacity change (recalibration) stays in the same battery's raw directory; a serial change starts a new one | `tests/tracker.test.js` |
 | Held-out scoring never sees the window it predicts | `tests/model-lib.test.js`, `tests/backtest.test.js` |
 | Estimator selection holds on steady load, switches on a real shift, ignores noise | `tests/model-lib.test.js` |
 | Estimator selection refuses to choose on thin evidence | `tests/model-lib.test.js` |
-| A corrupt or missing estimator store falls back to the default | `tests/model-lib.test.js` |
+| A corrupt or missing `battery-state.tsv` falls back to the default estimator | `tests/model-lib.test.js` |
 | The tracker records a selected estimator when it records a window | `tests/tracker.test.js` |
 | The view projects with each battery's recorded estimator | `tests/view.test.js` |
 | The backtest reports the selection the tracker would make | `tests/backtest.test.js` |
@@ -106,8 +110,9 @@ This doc is the single source of pending work. GitHub issues are archived
       threshold; confirm runtime labels match each phase.
 - [ ] Stop one user service and confirm runtime becomes `(cached)`, a stale-data
       warning appears, and the report gives one recovery action.
-- [ ] Run `make status VERBOSE=1` and confirm diagnostics appear without serials,
-      model IDs, applications, or other personal data.
+- [ ] Run `make status VERBOSE=1` and confirm identity (vendor, model, serial)
+      appears deliberately, per [ADR-0001](adr/0001-raw-observation-tier.md) —
+      not omitted, and never anything beyond battery/machine facts.
 - [ ] Confirm each battery block shows its own `X/12 windows` and `Y/3 sessions`, and
       `NO_COLOR=1 make status` removes ANSI styling.
 - [ ] Run `make uninstall`, reinstall, and confirm history is retained.
@@ -129,8 +134,7 @@ session"?
 
 | Case | Question | Notes |
 | --- | --- | --- |
-| Suspend / resume | Can a mains change and reversal entirely inside suspend be detected? | A gap produces `> X`, but hidden transitions cannot be reconstructed; see [architecture](architecture.md#open-edge-cases) |
-| Shutdown / poweroff mid-session | Does the state file need a flush-on-shutdown path to recover transitions while stopped? | Restart produces `> X`; no flush path exists today |
+| Mains change entirely inside a gap | Can a plug/unplug and reversal that happens entirely during suspend or a service outage be recovered? | The gap itself is now classified (`off`/`asleep`/`blind`/`clock`, [ADR-0001](adr/0001-raw-observation-tier.md)); the precise moment of a hidden transition inside it is not; see [architecture](architecture.md#open-edge-cases) |
 | Last battery removed at runtime | Beyond the mid-session `removed` row, does the panel degrade gracefully to hidden if the battery never comes back? | Install-time preflight already refuses on zero-battery machines; this is the runtime case |
 | Real-hardware verification | Confirm timing (settle time, notification text) on laptops other than the T480 | Was tracked as issue #4; see below |
 

@@ -22,6 +22,7 @@ depends=(
   'systemd'         # user timer and services
   'upower'          # power-event monitor and the panel's live D-Bus data
   'omarchy'         # the shell that hosts the panel and the power profiles
+  'zip'             # make export's archive step
 )
 
 optdepends=(

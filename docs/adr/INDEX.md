@@ -5,4 +5,4 @@ Rationale lives in each file under `docs/adr/`; this is an index only.
 
 | ADR | Status | Implemented | Decision |
 | --- | --- | --- | --- |
-| [0001](0001-raw-observation-tier.md) | accepted | not-started | Raw-observation tier, single extractor, and per-battery gap tracking |
+| [0001](0001-raw-observation-tier.md) | accepted | done | Raw-observation tier, single extractor, and per-battery gap tracking |

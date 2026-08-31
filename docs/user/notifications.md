@@ -81,9 +81,21 @@ BAT0: 12% → 22%
 BAT1: 80% → 80%
 ```
 
-The first line is the approximate session duration. Each battery gets one
-start-to-end row. A battery that didn't move (already at its threshold)
-still gets a row — equal start and end values already say "no change."
+The first line is the approximate session duration, and it comes in two
+forms:
+
+- `Charged for ~18m` — the session was tracked continuously; the duration
+  is trustworthy.
+- `Charged over ~2h 40m (interrupted)` — the machine slept, restarted, or the
+  tracker was briefly down partway through, so the wall-clock span is real
+  but the plugged-in time inside it wasn't watched continuously.
+
+Each battery's start-to-end row is independent of which duration form shows:
+a percentage delta is reported whenever a start level was actually captured,
+even across an interruption. A battery that didn't move (already at its
+threshold) still gets a row — equal start and end values already say "no
+change." If the charge start itself was never observed, neither the
+duration line nor that battery's row appears.
 
 ## Rules that apply to every notification
 

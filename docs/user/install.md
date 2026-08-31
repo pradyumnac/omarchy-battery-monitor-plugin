@@ -6,6 +6,7 @@
 - A laptop battery (`make doctor` checks this)
 - UPower and `systemctl --user`
 - Bash 4.3 or newer, and `awk`
+- `zip`, for `make export`'s archive step
 - A Nerd Font available to the Omarchy shell
 
 `make doctor` checks every one of these before anything is written. `PKGBUILD`

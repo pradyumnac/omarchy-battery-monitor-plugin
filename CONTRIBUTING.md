@@ -20,7 +20,7 @@ make check   # syntax, unit files, qmllint, JS parse
 make test    # the Node suite
 ```
 
-Two rules carry most of the weight here:
+Three rules carry most of the weight here:
 
 - **Model rules live in `service/battery-model.sh`.** The evidence gate, the
   window arithmetic, the projection, the threshold rule, and the scoring each
@@ -28,12 +28,20 @@ Two rules carry most of the weight here:
   is how several shipped bugs happened.
 - **Consumers read the aggregated view, never the internals.** If the panel or
   a report needs a field, add it to `service/battery-view.sh`; do not reach
-  past it to sysfs or the state file. See
+  past it to sysfs, `raw/`, or `windows.tsv` directly. See
   [the view reference](docs/dev/view-reference.md).
+- **Raw observations are the only source of truth.** `windows.tsv`,
+  `gaps.tsv`, and `battery-state.tsv` are regenerable from `raw/` by one
+  extraction function, called both incrementally (per poll) and in batch
+  (`make reextract`). If a change to that function makes the two paths
+  disagree, `make reextract`'s diff-by-default catches it — run it after
+  touching extraction logic. See
+  [ADR-0001](docs/adr/0001-raw-observation-tier.md).
 
 No model change ships on plausibility. `make backtest` scores candidates
-against each battery's own held-out windows, and `make export` writes the same
-history as CSV for exploring a question in a notebook first.
+against each battery's own held-out windows, and `make export` bundles the
+same data as a zip (raw, windows, gaps, battery state) for exploring a
+question in a notebook first.
 
 For UI changes, test on a laptop with one and two batteries when possible. Also check that the widget stays hidden on a desktop without laptop batteries.
 Use `make status` for the concise lifecycle report and

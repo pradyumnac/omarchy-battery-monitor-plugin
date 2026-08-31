@@ -63,8 +63,9 @@ Pack totals across every present battery, read live from sysfs on each view.
 
 ### `model`
 
-The learned runtime model. Every duration is in seconds and is `0` when the
-model has nothing to say.
+The pack-level learned runtime model — the sum of every battery's own
+`projection` (below). Every duration is in seconds and is `0` when the model
+has nothing to say.
 
 | Field | Meaning |
 | --- | --- |
@@ -75,7 +76,6 @@ model has nothing to say.
 | `remaining_seconds` | Stored energy at the typical draw |
 | `full_seconds` | Full usable capacity at the typical draw |
 | `remaining_low_seconds` / `remaining_high_seconds` | p25–p75 band. A heavier draw buys less time, so the p75 draw sets the *low* edge |
-| `recent_draw_mw` / `recent_remaining_seconds` / `recent_windows` | The "right now" estimate over the newest few windows |
 | `updated_epoch` | Timestamp of the newest window in evidence |
 
 `state` values in detail:
@@ -87,36 +87,60 @@ model has nothing to say.
 | `learning` | Below the provisional gate; no estimate is offered |
 | `blocked-energy` | Evidence is complete but the battery reports no energy |
 | `blocked-runtime` | Evidence is complete but yields no usable draw |
-| `unavailable` | The history file is in a format this version does not read |
+| `unavailable` | `windows.tsv` is in a format this version does not read |
 
 ### `history`, `sampling`, `tracker`
 
 | Field | Meaning |
 | --- | --- |
 | `history.state` | `ready`, `missing`, or `unsupported` |
-| `history.total` / `recent` / `archived` / `future` | Row counts; `future` rows are retained for diagnosis but are never evidence |
-| `history.foreign_pack` | Windows inside the lookback measured on a different, identified battery set. They still count as draw evidence — draw belongs to the machine — but a non-zero value means the pack changed |
-| `history.unattributed` | Version-1 windows, recorded before identity tracking. Evidence, but never assigned to a set |
-| `history.previous_pack` | Key of the most recent other set, or empty |
+| `history.total` / `recent` / `archived` / `future` | Row counts from `windows.tsv`; `future` rows are retained for diagnosis but are never evidence |
+| `history.ineligible` | Windows that spanned a gap (see [ADR-0001](adr/0001-raw-observation-tier.md)) — retained for reconstruction, never counted as evidence |
+| `sampling.fingerprint` | Names and measurement mode of the batteries installed now |
 | `sampling.pack_key` | Identity of the set installed now: `NAME:VENDOR:MODEL:SERIAL` per battery, comma separated in name order |
-| `batteries[].projection.estimator` | Which estimator this battery projects with, chosen by the tracker from its own held-out score |
-| `batteries[].projection.estimator_error_mw` | That estimator's held-out mean error on this battery, so the choice is auditable |
 | `sampling.pack_key_weak` | `true` when the firmware publishes no serial, so two identical spare batteries cannot be told apart. Say so rather than implying certainty |
-| `sampling.window_start_epoch` / `window_seconds` / `window_target_seconds` | Progress of the open discharge window |
-| `sampling.reset_reason` | Why the open window last restarted, or empty |
-| `sampling.session_id` / `fingerprint` | Current discharge session, and the battery set it belongs to |
 | `tracker.last_observed_epoch` / `age_seconds` | When the tracker last ran |
 | `tracker.freshness` | `live`, `cached`, `clock-mismatch`, or `unknown` |
+
+Top-level `sampling` carries only pack identity. Everything about the *open
+discharge window* — start, elapsed seconds, and the most recent
+interruption — is per battery now, not pooled: see `batteries[].sampling`
+below. There is no top-level `sampling.session_id` or `reset_reason`; a
+continuous discharge run's identity (`session_epoch`) lives in `windows.tsv`
+itself, and the per-battery `sampling.last_gap_cause` replaces the old single
+reset reason.
 
 ### `batteries`, `profiles`, `system`
 
 `batteries` is one object per present battery: `name`, `status`, `percent`,
 `energy_now_uwh`, `energy_full_uwh`, `energy_full_design_uwh`, `power_now_uw`,
-`cycle_count`, `model`, `vendor`, `end_threshold_percent`, `held`, `key`, and
-`projection`. `model` is the cell's model name; `projection` is its own runtime
-model, deliberately named apart so the two never collide. `name` is
-the sysfs directory name, which is what UPower reports as `nativePath`, so a
-consumer can join the two without a lookup table.
+`cycle_count`, `model`, `vendor`, `end_threshold_percent`, `held`, `key`,
+`sampling`, and `projection`. `model` is the cell's model name; `projection`
+is its own runtime model, deliberately named apart so the two never collide.
+`name` is the sysfs directory name, which is what UPower reports as
+`nativePath`, so a consumer can join the two without a lookup table.
+
+`batteries[].sampling` is this battery's own open discharge window, read from
+`battery-state.tsv` and `gaps.tsv` (see the
+[state file reference](state-file-reference.md)):
+
+| Field | Meaning |
+| --- | --- |
+| `window_start_epoch` | Start of this battery's currently open sampling window, or `0` if none is open |
+| `window_seconds` | Elapsed seconds in the open window |
+| `window_target_seconds` | The window length a poll needs to reach before it can be recorded (`BATTERY_MODEL_WINDOW_SECONDS`) |
+| `last_gap_cause` | This battery's most recent interruption: `off`, `asleep`, `blind`, `clock`, or empty if none recorded |
+| `last_gap_epoch` | End time of that gap, or `0` |
+
+`batteries[].projection` is this battery's own runtime model — the same
+shape as the pack-level `model` above, minus the evidence-gate constants
+(`required_windows`/`required_sessions`, which are pack-wide), plus two
+fields specific to a battery's own estimator:
+
+| Field | Meaning |
+| --- | --- |
+| `estimator` | Which estimator this battery projects with, chosen by the tracker from its own held-out score |
+| `estimator_error_mw` | That estimator's held-out mean error on this battery, so the choice is auditable |
 
 `held` is the answer to "is this battery parked at its own configured charge
 cap". Read it; do not re-derive it. sysfs reports both a genuine hold and "not
