@@ -6,13 +6,13 @@ export PLUGIN_DIR
 
 # Syntax and lint checks only. Run `make test` separately for the test suite.
 check:
-	bash -n service/battery-session-tracker.sh service/battery-session-monitor.sh service/power-supply.sh service/battery-model.sh service/battery-view.sh scripts/battery-session-preflight.sh scripts/install-session-tracker.sh scripts/uninstall-session-tracker.sh scripts/plugin-files.sh scripts/battery-intelligence-status.sh scripts/battery-backtest.sh scripts/battery-export.sh scripts/battery-reextract.sh scripts/check-doc-links.sh
-	# Service executables exist only after `make install`; verify the static timer here.
-	systemd-analyze verify service/battery-session-tracker.timer
-	# The flags below are Qt6-only, so prefer the Qt6 binary explicitly —
-	# `qmllint` on PATH may resolve to a Qt5 build that rejects them.
-	# shellcheck disable=SC1036,SC1088
-	qmllint_bin=$$(command -v /usr/lib/qt6/bin/qmllint 2>/dev/null || command -v qmllint 2>/dev/null || true); \
+	@bash -n service/battery-session-tracker.sh service/battery-session-monitor.sh service/power-supply.sh service/battery-model.sh service/battery-view.sh scripts/battery-session-preflight.sh scripts/install-session-tracker.sh scripts/uninstall-session-tracker.sh scripts/plugin-files.sh scripts/battery-intelligence-status.sh scripts/battery-backtest.sh scripts/battery-export.sh scripts/battery-reextract.sh scripts/check-doc-links.sh
+	@# Service executables exist only after `make install`; verify the static timer here.
+	@systemd-analyze verify service/battery-session-tracker.timer
+	@# The flags below are Qt6-only, so prefer the Qt6 binary explicitly —
+	@# `qmllint` on PATH may resolve to a Qt5 build that rejects them.
+	@# shellcheck disable=SC1036,SC1088
+	@qmllint_bin=$$(command -v /usr/lib/qt6/bin/qmllint 2>/dev/null || command -v qmllint 2>/dev/null || true); \
 	if [ -n "$$qmllint_bin" ]; then \
 		"$$qmllint_bin" \
 			--import disable \
@@ -26,9 +26,9 @@ check:
 	else \
 		echo "qmllint not installed; skipping QML validation"; \
 	fi
-	node --check Model.js
-	scripts/check-doc-links.sh
-	git diff --check
+	@node --check Model.js
+	@scripts/check-doc-links.sh
+	@git diff --check
 
 test:
 	node --test tests/*.test.js
