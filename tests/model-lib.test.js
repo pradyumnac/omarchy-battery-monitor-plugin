@@ -212,59 +212,6 @@ describe("statistics and projection", () => {
   });
 });
 
-describe("discharge-window arithmetic", () => {
-  test("turns energy consumed over time into an average draw", () => {
-    // Given 2.5 Wh drawn over 15 minutes
-    // When the window draw is computed
-    // Then it is 10 W
-    assert.equal(
-      evaluate("battery_model_window_draw_mw 2500000 900"),
-      "10000",
-    );
-  });
-
-  test("refuses a window that consumed nothing or took no time", () => {
-    assert.equal(
-      evaluate("battery_model_window_draw_mw 0 900 || echo refused"),
-      "refused",
-    );
-    assert.equal(
-      evaluate("battery_model_window_draw_mw 2500000 0 || echo refused"),
-      "refused",
-    );
-  });
-
-  test("only accepts a window that ran long enough to be evidence", () => {
-    assert.equal(
-      evaluate("battery_model_window_complete 900 && echo yes || echo no"),
-      "yes",
-    );
-    assert.equal(
-      evaluate("battery_model_window_complete 899 && echo yes || echo no"),
-      "no",
-    );
-  });
-
-  test("rejects a draw no laptop battery could really produce", () => {
-    // Given a draw far outside a plausible range, as a suspend or a counter
-    // jump produces
-    // When it is checked
-    // Then it is rejected before it can become evidence
-    assert.equal(
-      evaluate("battery_model_draw_plausible 10000 && echo ok || echo no"),
-      "ok",
-    );
-    assert.equal(
-      evaluate("battery_model_draw_plausible 5 && echo ok || echo no"),
-      "no",
-    );
-    assert.equal(
-      evaluate("battery_model_draw_plausible 999999 && echo ok || echo no"),
-      "no",
-    );
-  });
-});
-
 describe("reading windows.tsv", () => {
   function withWindowsFile(rows, callback, header) {
     return withFixture({ state: "model-windows" }, (f) => {

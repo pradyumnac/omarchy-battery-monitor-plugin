@@ -92,13 +92,6 @@ battery_raw_row() {
     "$ac_online" "$boot_id" "$suspend_count" "$uptime_s"
 }
 
-battery_raw_valid() {
-  local first_line
-  [[ -f "$1" ]] || return 1
-  IFS= read -r first_line <"$1" 2>/dev/null || return 1
-  [[ $first_line == "$BATTERY_RAW_HEADER" ]]
-}
-
 # Sanitize a battery key for use as a directory name: replace only what the
 # filesystem actually forbids (/, NUL). No other transformation — this is a
 # continuation of identity-anchoring, not a new privacy boundary.
@@ -134,14 +127,13 @@ battery_raw_uptime_seconds() {
 }
 
 
-# The tracker state file's schema. v1 files carry no version key and also carry
-# derived model fields (battery_energy_now_uwh, usual_*) that v2 dropped: the
-# view recomputes those from live sysfs and the history, so there is no longer
-# a second, staler copy of them on disk.
 # The tracker's session-bookkeeping state file (previous_state, state_since,
-# charge_start_levels, ...). Unrelated to the raw/windows/gaps/state-tier
-# format versions above: this file was never derivable from raw and remains
-# the one thing that is not a cache.
+# charge_start_levels, ...). v1 files carry no version key and also carried
+# derived model fields (battery_energy_now_uwh, usual_*) that v2 dropped, since
+# the view now recomputes those from live sysfs and windows.tsv rather than
+# keeping a second, staler copy on disk. Unrelated to the raw/windows/gaps/
+# state-tier format versions above: this file was never derivable from raw and
+# remains the one thing that is not a cache.
 readonly BATTERY_STATE_SCHEMA_VERSION=2
 
 # --- Loaded history --------------------------------------------------------
@@ -151,10 +143,6 @@ readonly BATTERY_STATE_SCHEMA_VERSION=2
 # given cell must use only that cell's own evidence.
 
 battery_model_state=""               # missing | unsupported | ready
-battery_model_history_version=0
-battery_model_total_rows=0           # valid rows in the file, any age
-battery_model_future_rows=0          # rows dated after `now`
-battery_model_legacy_rows=0          # pack-level rows from schema v1 and v2
 declare -A battery_model_key_draws=()      # key -> space separated draws
 declare -A battery_model_key_sessions=()   # key -> space separated session ids
 declare -A battery_model_key_last=()       # key -> newest epoch
@@ -237,9 +225,6 @@ battery_model_load_windows() {
   local kind epoch key draw session
 
   battery_model_state="missing"
-  battery_model_total_rows=0
-  battery_model_future_rows=0
-  battery_model_legacy_rows=0
   battery_model_windows_total_rows=0
   battery_model_windows_future_rows=0
   battery_model_windows_ineligible_rows=0
@@ -588,24 +573,6 @@ battery_model_project_seconds() {
   printf '%s' "$(((energy_uwh * 3600 + draw_mw * 500) / (draw_mw * 1000)))"
 }
 
-# --- Discharge-window arithmetic -------------------------------------------
-# Values in, values out. The tracker owns the on-disk round trip; the rules for
-# turning two energy samples into evidence live here.
-
-# Average draw in mW over a window, from the energy it consumed and how long it
-# ran. Prints nothing and fails when the inputs cannot produce a draw.
-battery_model_window_draw_mw() {
-  local energy_used_uwh=$1 elapsed_seconds=$2
-  ((energy_used_uwh > 0 && elapsed_seconds > 0)) || return 1
-  printf '%s' "$(((energy_used_uwh * 3600 + elapsed_seconds * 500) / (elapsed_seconds * 1000)))"
-}
-
-# Has the window run long enough to count as evidence?
-battery_model_window_complete() {
-  local elapsed_seconds=$1
-  ((elapsed_seconds >= BATTERY_MODEL_WINDOW_SECONDS))
-}
-
 # --- Extraction (ADR-0001): raw -> windows + gaps + battery-state ---------
 #
 # The one place raw observations become windows. Called two ways: once per
@@ -789,11 +756,4 @@ battery_model_threshold_held() {
   [[ $status == "Not charging" ]] || return 1
   [[ $percent =~ ^[0-9]+$ && $threshold =~ ^[0-9]+$ ]] || return 1
   ((threshold > 0 && percent >= threshold))
-}
-
-# Is this draw physically believable for a laptop battery?
-battery_model_draw_plausible() {
-  local draw_mw=$1
-  [[ $draw_mw =~ ^[0-9]+$ ]] &&
-    ((draw_mw >= BATTERY_MODEL_MIN_DRAW_MW && draw_mw <= BATTERY_MODEL_MAX_DRAW_MW))
 }
