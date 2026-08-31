@@ -12,6 +12,7 @@ power_supply_root="${POWER_SUPPLY_ROOT:-/sys/class/power_supply}"
 systemctl_command="${BATTERY_SESSION_SYSTEMCTL_COMMAND:-systemctl}"
 monitor_command="${BATTERY_SESSION_MONITOR_COMMAND:-upower}"
 awk_command="${BATTERY_SESSION_AWK_COMMAND:-awk}"
+zip_command="${BATTERY_SESSION_ZIP_COMMAND:-zip}"
 notification_command="${BATTERY_SESSION_NOTIFY_COMMAND:-omarchy-notification-send}"
 
 hard_failures=0
@@ -72,6 +73,14 @@ if command -v -- "$awk_command" >/dev/null 2>&1; then
   check_ok "$awk_command found"
 else
   check_fail "$awk_command not found; the discharge model cannot be computed without it"
+fi
+
+# make export bundles every tier of collected data into one archive; without
+# zip that command cannot produce its output at all.
+if command -v -- "$zip_command" >/dev/null 2>&1; then
+  check_ok "$zip_command found"
+else
+  check_fail "$zip_command not found; make export cannot write its archive without it"
 fi
 
 # Bash 4.3 or newer: the scripts use associative arrays, mapfile, and namerefs.

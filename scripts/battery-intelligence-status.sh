@@ -118,6 +118,10 @@ service_state() {
 
 sampling_reason_label() {
   case $1 in
+  off) printf 'machine was off (shutdown, reboot, or hibernate)' ;;
+  asleep) printf 'machine was suspended' ;;
+  blind) printf 'the tracker was not running' ;;
+  clock) printf 'the system clock changed' ;;
   battery-set-changed) printf 'battery set changed' ;;
   battery-baseline-missing) printf 'per-battery baseline missing after upgrade' ;;
   no-battery-evidence) printf 'no battery measurably discharged' ;;
@@ -222,12 +226,21 @@ battery_block() {
   fi
   # The sampling window measures whichever battery is actually discharging, so
   # its progress is reported against that battery rather than the pack.
-  if [[ ${view_bat_status[index]} == Discharging ]] && ((view_window_start_epoch > 0)); then
-    local progress=$((view_window_seconds * 100 / BATTERY_MODEL_WINDOW_SECONDS))
+  local this_window_start=${view_bat_window_start_epoch[index]}
+  local this_window_seconds=${view_bat_window_seconds[index]}
+  if [[ ${view_bat_status[index]} == Discharging ]] && ((this_window_start > 0)); then
+    local progress=$((this_window_seconds * 100 / BATTERY_MODEL_WINDOW_SECONDS))
     ((progress > 100)) && progress=100
     subfield "Current sample" \
-      "$progress% · $(format_duration "$view_window_seconds") of $(format_duration "$BATTERY_MODEL_WINDOW_SECONDS")" \
+      "$progress% · $(format_duration "$this_window_seconds") of $(format_duration "$BATTERY_MODEL_WINDOW_SECONDS")" \
       "$cyan"
+  fi
+  # A gap this battery's own raw history recorded, if it happened recently
+  # enough to still explain what the reader is looking at.
+  local this_gap_cause=${view_bat_gap_cause[index]} this_gap_epoch=${view_bat_gap_epoch[index]}
+  if [[ -n $this_gap_cause ]] && ((this_gap_epoch > 0)) &&
+    ((view_generated_epoch - this_gap_epoch <= BATTERY_MODEL_MAX_POLL_GAP_SECONDS * 4)); then
+    subfield "Sampling" "restarted · $(sampling_reason_label "$this_gap_cause")" "$yellow"
   fi
   if ((view_bat_remaining_seconds[index] > 0)); then
     subfield "From this level" "$(format_duration "${view_bat_remaining_seconds[index]}")"
@@ -365,9 +378,9 @@ unavailable)
   ;;
 esac
 
-if ((view_history_legacy > 0)); then
-  field "Legacy rows" \
-    "$view_history_legacy pack-level row(s) from an older schema · not usable per battery" "$dim"
+if ((view_history_ineligible > 0)); then
+  field "Ineligible windows" \
+    "$view_history_ineligible window(s) spanned an interruption · not modelled" "$dim"
 fi
 if ((view_history_archived > 0)); then
   field "History" "$view_history_recent recent · $view_history_archived archived" "$dim"
@@ -376,13 +389,8 @@ if ((view_history_future > 0)); then
   field "History warning" "$view_history_future future-dated row(s) ignored" "$yellow"
 fi
 
-if [[ -n $view_window_reset_reason ]]; then
-  if [[ $view_window_reset_reason == energy-unavailable ]] && ((view_window_start_epoch == 0)); then
-    field "Sampling" "paused · $(sampling_reason_label "$view_window_reset_reason")" "$yellow"
-  else
-    field "Sampling" "restarted · $(sampling_reason_label "$view_window_reset_reason")" "$yellow"
-  fi
-fi
+# Per-battery sampling restarts are reported inside each battery's own block
+# above. A shared cause is deliberately not repeated here — see battery_block.
 
 case $freshness in
 live) field "Updated" "$(format_age "$view_tracker_age_seconds")" "$dim" ;;
@@ -402,12 +410,8 @@ if [[ $verbose == 1 ]]; then
   if ((view_model_updated_epoch > 0)); then
     field "Last learned" "$(format_age $((view_generated_epoch - view_model_updated_epoch)))" "$dim"
   fi
-  field "Session" "${view_session_id:-none}" "$dim"
-  if ((view_window_start_epoch > 0)); then
-    field "Window" "open $(format_duration "$view_window_seconds") of $(format_duration "$BATTERY_MODEL_WINDOW_SECONDS")" "$dim"
-  else
-    field "Window" "inactive" "$dim"
-  fi
+  # Open sampling windows are per battery now; see each battery's own
+  # "Current sample" line above rather than one pack-level session/window pair.
   field "Battery fingerprint" "${view_battery_fingerprint//\\,/, }" "$dim"
   field "Battery set key" "${view_pack_key//,/, }" "$dim"
 fi

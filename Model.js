@@ -54,7 +54,7 @@ function emptyView() {
     fullSeconds: 0,
     remainingLowSeconds: 0,
     remainingHighSeconds: 0,
-    legacyRows: 0,
+    historyIneligible: 0,
     absentBatteries: [],
     packKey: "",
     packKeyWeak: false,
@@ -118,9 +118,7 @@ function parseView(raw) {
   view.remainingHighSeconds = viewNumber(model.remaining_high_seconds);
 
   var history = parsed.history || {};
-  // Evidence recorded on a battery set that is no longer installed. Non-zero
-  // means the pack changed and earlier windows stopped counting.
-  view.legacyRows = viewNumber(history.legacy);
+  view.historyIneligible = viewNumber(history.ineligible);
   var sampling = parsed.sampling || {};
   view.packKey = String(sampling.pack_key || "");
   view.packKeyWeak = sampling.pack_key_weak === true;
@@ -154,6 +152,7 @@ function parseView(raw) {
     var name = String(battery.name || "");
     if (!name) continue;
     var batteryModel = battery.projection || {};
+    var batterySampling = battery.sampling || {};
     view.batteries[name] = {
       status: String(battery.status || ""),
       percentage: viewNumber(battery.percent),
@@ -163,6 +162,16 @@ function parseView(raw) {
       endThreshold: viewNumber(battery.end_threshold_percent),
       held: battery.held === true,
       key: String(battery.key || ""),
+      // This battery's own open sampling window, and its most recent
+      // interruption if any — never the pack's, since each cell is measured
+      // on its own.
+      sampling: {
+        windowStartEpoch: viewNumber(batterySampling.window_start_epoch),
+        windowSeconds: viewNumber(batterySampling.window_seconds),
+        windowTargetSeconds: viewNumber(batterySampling.window_target_seconds),
+        lastGapCause: String(batterySampling.last_gap_cause || ""),
+        lastGapEpoch: viewNumber(batterySampling.last_gap_epoch),
+      },
       // This battery's own runtime projection, built only from its own
       // windows. Named apart from `model`, which is the cell's model name.
       projection: {

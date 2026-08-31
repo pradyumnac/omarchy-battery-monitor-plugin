@@ -1,12 +1,12 @@
 # shellcheck disable=all
-.PHONY: check test install uninstall uninstall-purge-data reload restart-shell status view backtest export benchmark preflight doctor
+.PHONY: check test install uninstall uninstall-purge-data reload restart-shell status view backtest export reextract benchmark preflight doctor
 
 PLUGIN_DIR ?= $(HOME)/.config/omarchy/plugins/doe.power
 export PLUGIN_DIR
 
 # Syntax and lint checks only. Run `make test` separately for the test suite.
 check:
-	bash -n service/battery-session-tracker.sh service/battery-session-monitor.sh service/power-supply.sh service/battery-model.sh service/battery-view.sh scripts/battery-session-preflight.sh scripts/install-session-tracker.sh scripts/uninstall-session-tracker.sh scripts/plugin-files.sh scripts/battery-intelligence-status.sh scripts/battery-backtest.sh scripts/battery-export.sh
+	bash -n service/battery-session-tracker.sh service/battery-session-monitor.sh service/power-supply.sh service/battery-model.sh service/battery-view.sh scripts/battery-session-preflight.sh scripts/install-session-tracker.sh scripts/uninstall-session-tracker.sh scripts/plugin-files.sh scripts/battery-intelligence-status.sh scripts/battery-backtest.sh scripts/battery-export.sh scripts/battery-reextract.sh
 	# Service executables exist only after `make install`; verify the static timer here.
 	systemd-analyze verify service/battery-session-tracker.timer
 	# The flags below are Qt6-only, so prefer the Qt6 binary explicitly —
@@ -89,6 +89,14 @@ backtest:
 # `make export > battery-history.csv`
 export:
 	@scripts/battery-export.sh $(HISTORY)
+
+# Rebuild windows.tsv, gaps.tsv, and battery-state.tsv from raw observations
+# and diff against the live files (ADR-0001). The tracker derives these
+# incrementally with the same extraction function; a clean diff is the
+# standing proof the two paths agree. `make reextract FORCE=1` replaces the
+# live files with the freshly regenerated ones.
+reextract:
+	@scripts/battery-reextract.sh $(if $(FORCE),--force,)
 
 # Measure what this plugin costs the battery it monitors: CPU time charged to
 # each unit, and the exact number of processes one tracker poll forks.

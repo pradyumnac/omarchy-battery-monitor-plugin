@@ -42,10 +42,6 @@ view_state_since_epoch=0
 view_state_since_at_least=0
 view_charge_start_epoch=0
 view_charge_end_epoch=0
-view_session_id=""
-view_window_start_epoch=0
-view_window_seconds=0
-view_window_reset_reason=""
 view_battery_fingerprint=""
 view_last_observed_epoch=0
 view_tracker_age_seconds=0
@@ -71,7 +67,7 @@ view_history_total=0
 view_history_recent=0
 view_history_archived=0
 view_history_future=0
-view_history_legacy=0         # pack-level rows from schema v1 and v2
+view_history_ineligible=0     # windows spanning a gap, never modelled
 view_pack_key=""              # identity of the set installed now
 view_pack_key_weak=0          # 1 when no serial separates identical spares
 # Batteries this machine has evidence for that are not installed right now.
@@ -108,6 +104,10 @@ view_bat_remaining_low_seconds=()
 view_bat_remaining_high_seconds=()
 view_bat_estimator=()          # the estimator this battery projects with
 view_bat_estimator_error=()    # its held-out mean error, mW
+view_bat_window_start_epoch=()  # this battery's own open sampling window
+view_bat_window_seconds=()
+view_bat_gap_cause=()          # this battery's most recent gap, if any
+view_bat_gap_epoch=()
 
 # --- Helpers ---------------------------------------------------------------
 
@@ -138,11 +138,13 @@ battery_view_nonnegative_int() {
 battery_view_collect() {
   local state_dir history_file state_file
   local battery_dir name raw value energy full design power threshold
-  local stale_after
+  local stale_after windows_file state_tier_file gaps_file
 
   state_dir="${BATTERY_SESSION_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/battery-session}"
   state_file="$state_dir/state"
-  history_file="$state_dir/discharge-history.tsv"
+  windows_file="$state_dir/windows.tsv"
+  state_tier_file="$state_dir/battery-state.tsv"
+  gaps_file="$state_dir/gaps.tsv"
   power_supply_root="${POWER_SUPPLY_ROOT:-${BATTERY_STATUS_POWER_SUPPLY_ROOT:-/sys/class/power_supply}}"
   stale_after="${BATTERY_STATUS_STALE_AFTER:-$BATTERY_MODEL_MAX_POLL_GAP_SECONDS}"
 
@@ -156,7 +158,7 @@ battery_view_collect() {
 
   battery_view_collect_state "$state_file"
   battery_view_collect_batteries
-  battery_view_collect_model "$history_file"
+  battery_view_collect_model "$windows_file" "$state_tier_file" "$gaps_file"
   battery_view_collect_freshness "$stale_after"
   battery_view_collect_system
 }
@@ -167,7 +169,6 @@ battery_view_collect_state() {
   local state_file=$1
   local previous_state="" state_since=0 state_since_at_least=0
   local last_charge_start=0 last_charge_end=0 last_observed=0
-  local discharge_session_id="" window_start_epoch=0 window_reset_reason=""
   local battery_fingerprint=""
 
   if [[ -f "$state_file" ]]; then
@@ -181,15 +182,7 @@ battery_view_collect_state() {
   battery_view_nonnegative_int "$last_charge_start" && view_charge_start_epoch=$last_charge_start
   battery_view_nonnegative_int "$last_charge_end" && view_charge_end_epoch=$last_charge_end
   battery_view_nonnegative_int "$last_observed" && view_last_observed_epoch=$last_observed
-  view_session_id=$discharge_session_id
-  battery_view_nonnegative_int "$window_start_epoch" && view_window_start_epoch=$window_start_epoch
-  view_window_reset_reason=$window_reset_reason
   view_battery_fingerprint=$battery_fingerprint
-
-  if battery_view_positive_int "$view_window_start_epoch" &&
-    ((view_generated_epoch >= view_window_start_epoch)); then
-    view_window_seconds=$((view_generated_epoch - view_window_start_epoch))
-  fi
 }
 
 # One pass over sysfs. Fills the per-battery arrays and the pack totals the
@@ -319,20 +312,16 @@ battery_view_collect_batteries() {
 # which holds because these batteries discharge in sequence rather than
 # together — while one supplies the system the other sits idle.
 battery_view_collect_model() {
-  local history_file=$1
+  local windows_file=$1 state_tier_file=$2 gaps_file=$3
   local index key confidence draw p25 p75 energy_now energy_full estimator
   local ready_count=0 modelled=0 present_count=${#view_bat_name[@]}
-  local absent
+  local absent gap_line gap_start gap_end gap_cause _gap_start _gap_end _gap_cause
 
-  battery_model_load_history "$history_file" "$view_generated_epoch"
-  # Which estimator each battery projects with was decided by the tracker when
-  # it last recorded a window. Reading the answer keeps the scoring cost off
-  # the panel refresh path.
-  battery_model_load_estimators "${history_file%/*}/estimators.tsv"
+  battery_model_load_windows "$windows_file" "$view_generated_epoch"
   view_history_state=$battery_model_state
-  view_history_total=$battery_model_total_rows
-  view_history_future=$battery_model_future_rows
-  view_history_legacy=$battery_model_legacy_rows
+  view_history_total=$battery_model_windows_total_rows
+  view_history_future=$battery_model_windows_future_rows
+  view_history_ineligible=$battery_model_windows_ineligible_rows
 
   for ((index = 0; index < present_count; index++)); do
     key=${view_bat_key[index]}
@@ -346,10 +335,35 @@ battery_view_collect_model() {
       view_model_updated_epoch=$battery_model_latest_epoch
     view_history_recent=$((view_history_recent + battery_model_window_count))
 
+    # This battery's own open sampling window and selected estimator, decided
+    # by the tracker when it last recorded a window — reading the answer keeps
+    # the scoring cost off the panel refresh path.
+    battery_model_load_tier3 "$state_tier_file" "$key"
+    view_bat_window_start_epoch+=("$battery_model_tier3_open_epoch")
+    if battery_view_positive_int "$battery_model_tier3_open_epoch" &&
+      ((view_generated_epoch >= battery_model_tier3_open_epoch)); then
+      view_bat_window_seconds+=("$((view_generated_epoch - battery_model_tier3_open_epoch))")
+    else
+      view_bat_window_seconds+=(0)
+    fi
+    # `read`'s target variables are cleared on a failed (empty-input) read
+    # even when the loop body never runs, so the defaults are assigned from
+    # separate read-only-on-success locals instead of being read into
+    # directly.
+    gap_cause=""
+    gap_end=0
+    while IFS=$'\t' read -r _gap_start _gap_end _gap_cause _; do
+      gap_end=$_gap_end
+      gap_cause=$_gap_cause
+      break
+    done < <(battery_model_gaps_for "$gaps_file" "$key")
+    view_bat_gap_cause+=("$gap_cause")
+    view_bat_gap_epoch+=("$gap_end")
+
     confidence=$(battery_model_confidence)
-    estimator=$(battery_model_estimator_for "$key")
+    estimator=$battery_model_tier3_estimator
     view_bat_estimator+=("$estimator")
-    view_bat_estimator_error+=("${battery_model_estimator_error[$key]:-0}")
+    view_bat_estimator_error+=("$battery_model_tier3_error")
     draw=0
     if [[ $confidence == ready || $confidence == provisional ]]; then
       draw=$(battery_model_estimator_draw "$estimator")
@@ -408,12 +422,9 @@ battery_view_collect_model() {
 
   # Every other battery this machine has evidence for. Reported so a swapped
   # cell stays visible; never mixed into a projection.
-  for key in ${battery_model_keys[@]+"${battery_model_keys[@]}"}; do
-    absent=1
-    for ((index = 0; index < present_count; index++)); do
-      [[ ${view_bat_key[index]} == "$key" ]] && absent=0 && break
-    done
-    ((absent == 1)) || continue
+  local -a _bv_present_keys=("${view_bat_key[@]}")
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
     battery_model_select_battery "$key"
     view_absent_key+=("$key")
     view_absent_windows+=("$battery_model_window_count")
@@ -421,10 +432,10 @@ battery_view_collect_model() {
     # Their windows are still inside the lookback, so they are recent evidence
     # about this machine even though no projection may use them.
     view_history_recent=$((view_history_recent + battery_model_window_count))
-  done
+  done < <(battery_model_absent_keys _bv_present_keys)
 
   view_history_archived=$((view_history_total - view_history_recent -
-    view_history_future - view_history_legacy))
+    view_history_future - view_history_ineligible))
   ((view_history_archived >= 0)) || view_history_archived=0
 }
 
@@ -484,7 +495,7 @@ battery_view_json_bool() {
 
 battery_view_json_batteries() {
   local -n _bv_bat_out=$1
-  local index separator="" name status cycles model vendor held key state estimator
+  local index separator="" name status cycles model vendor held key state estimator gap_cause
   _bv_bat_out=""
   for ((index = 0; index < ${#view_bat_name[@]}; index++)); do
     battery_view_json_string name "${view_bat_name[index]}"
@@ -496,7 +507,8 @@ battery_view_json_batteries() {
     battery_view_json_string key "${view_bat_key[index]}"
     battery_view_json_string state "${view_bat_model_state[index]}"
     battery_view_json_string estimator "${view_bat_estimator[index]}"
-    printf -v _bv_bat_out '%s%s\n    {"name": %s, "status": %s, "percent": %s, "energy_now_uwh": %s, "energy_full_uwh": %s, "energy_full_design_uwh": %s, "power_now_uw": %s, "cycle_count": %s, "model": %s, "vendor": %s, "end_threshold_percent": %s, "held": %s, "key": %s, "projection": {"state": %s, "estimator": %s, "estimator_error_mw": %s, "windows": %s, "sessions": %s, "typical_draw_mw": %s, "remaining_seconds": %s, "full_seconds": %s, "remaining_low_seconds": %s, "remaining_high_seconds": %s}}' \
+    battery_view_json_string gap_cause "${view_bat_gap_cause[index]}"
+    printf -v _bv_bat_out '%s%s\n    {"name": %s, "status": %s, "percent": %s, "energy_now_uwh": %s, "energy_full_uwh": %s, "energy_full_design_uwh": %s, "power_now_uw": %s, "cycle_count": %s, "model": %s, "vendor": %s, "end_threshold_percent": %s, "held": %s, "key": %s, "sampling": {"window_start_epoch": %s, "window_seconds": %s, "window_target_seconds": %s, "last_gap_cause": %s, "last_gap_epoch": %s}, "projection": {"state": %s, "estimator": %s, "estimator_error_mw": %s, "windows": %s, "sessions": %s, "typical_draw_mw": %s, "remaining_seconds": %s, "full_seconds": %s, "remaining_low_seconds": %s, "remaining_high_seconds": %s}}' \
       "$_bv_bat_out" "$separator" "$name" "$status" \
       "${view_bat_percent[index]}" \
       "${view_bat_energy_now_uwh[index]}" \
@@ -504,7 +516,10 @@ battery_view_json_batteries() {
       "${view_bat_energy_design_uwh[index]}" \
       "${view_bat_power_now_uw[index]}" \
       "$cycles" "$model" "$vendor" \
-      "${view_bat_end_threshold[index]}" "$held" "$key" "$state" "$estimator" \
+      "${view_bat_end_threshold[index]}" "$held" "$key" \
+      "${view_bat_window_start_epoch[index]}" "${view_bat_window_seconds[index]}" \
+      "$BATTERY_MODEL_WINDOW_SECONDS" "$gap_cause" "${view_bat_gap_epoch[index]}" \
+      "$state" "$estimator" \
       "${view_bat_estimator_error[index]}" \
       "${view_bat_windows[index]}" "${view_bat_sessions[index]}" \
       "${view_bat_typical_draw_mw[index]}" \
@@ -558,8 +573,6 @@ battery_view_emit_json() {
   battery_view_json_bool since_at_least "$view_state_since_at_least"
   battery_view_json_string model_state "$view_model_state"
   battery_view_json_string history_state "$view_history_state"
-  battery_view_json_string session_id "$view_session_id"
-  battery_view_json_string reset_reason "$view_window_reset_reason"
   battery_view_json_string fingerprint "$view_battery_fingerprint"
   battery_view_json_string freshness "$view_freshness"
   battery_view_json_string pack_key "$view_pack_key"
@@ -588,13 +601,11 @@ battery_view_emit_json() {
     "$view_typical_draw_mw" "$view_remaining_seconds" "$view_full_seconds" \
     "$view_remaining_low_seconds" "$view_remaining_high_seconds" \
     "$view_model_updated_epoch"
-  printf '  "history": {"state": %s, "total": %s, "recent": %s, "archived": %s, "future": %s, "legacy": %s},\n' \
+  printf '  "history": {"state": %s, "total": %s, "recent": %s, "archived": %s, "future": %s, "ineligible": %s},\n' \
     "$history_state" "$view_history_total" "$view_history_recent" \
-    "$view_history_archived" "$view_history_future" "$view_history_legacy"
-  printf '  "sampling": {"session_id": %s, "window_start_epoch": %s, "window_seconds": %s, "window_target_seconds": %s, "reset_reason": %s, "fingerprint": %s, "pack_key": %s, "pack_key_weak": %s},\n' \
-    "$session_id" "$view_window_start_epoch" "$view_window_seconds" \
-    "$BATTERY_MODEL_WINDOW_SECONDS" "$reset_reason" "$fingerprint" \
-    "$pack_key" "$pack_key_weak"
+    "$view_history_archived" "$view_history_future" "$view_history_ineligible"
+  printf '  "sampling": {"fingerprint": %s, "pack_key": %s, "pack_key_weak": %s},\n' \
+    "$fingerprint" "$pack_key" "$pack_key_weak"
   printf '  "tracker": {"last_observed_epoch": %s, "age_seconds": %s, "freshness": %s},\n' \
     "$view_last_observed_epoch" "$view_tracker_age_seconds" "$freshness"
   printf '  "batteries": [%s],\n' "$batteries"

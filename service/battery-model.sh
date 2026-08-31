@@ -65,14 +65,100 @@ readonly BATTERY_MODEL_MAX_DRAW_MW=120000
 # Version 1 and 2 rows stay readable, but they describe a pack rather than a
 # battery, so they can never be attributed to one. They are reported as legacy
 # and never modelled.
+# Legacy generation (superseded by ADR-0001). Read-only from here on: no new
+# row is ever written under these headers again.
 readonly BATTERY_MODEL_HISTORY_HEADER=$'# battery-discharge-history\tv3'
 readonly BATTERY_MODEL_HISTORY_HEADER_V2=$'# battery-discharge-history\tv2'
 readonly BATTERY_MODEL_HISTORY_HEADER_V1=$'# battery-discharge-history\tv1'
+
+# --- Raw-observation tier (ADR-0001) ----------------------------------------
+#
+# Every file from here on is semver format-versioned, independent of the
+# legacy v1-v3 markers above. `FORMAT` describes how to parse a file; it is
+# bumped only when a column is added, removed, or reinterpreted.
+readonly BATTERY_RAW_FORMAT="v0.1.0"
+readonly BATTERY_WINDOWS_FORMAT="v0.1.0"
+readonly BATTERY_GAPS_FORMAT="v0.1.0"
+readonly BATTERY_STATE_TIER_FORMAT="v0.1.0"
+
+# `rules` stamped on every raw row: the recording rules in force when it was
+# written (window length, draw formula, plausibility bounds, poll interval).
+# Bump this, not the format, when one of those constants changes — it lets a
+# reader tell rows apart without changing how the row is parsed.
+readonly BATTERY_RECORDING_RULES_VERSION="v0.1.0"
+
+readonly BATTERY_RAW_HEADER="# battery-raw-observations	${BATTERY_RAW_FORMAT}"
+readonly BATTERY_WINDOWS_HEADER="# battery-windows	${BATTERY_WINDOWS_FORMAT}"
+readonly BATTERY_GAPS_HEADER="# battery-gaps	${BATTERY_GAPS_FORMAT}"
+readonly BATTERY_STATE_TIER_HEADER="# battery-state	${BATTERY_STATE_TIER_FORMAT}"
+
+# A raw observation row. `trigger` is poll|plug|unplug|status|resume|start.
+# Columns after `capacity_control_end_threshold` mirror what sysfs publishes
+# for the battery; `ac_online`/`boot_id`/`suspend_count`/`uptime_s` are
+# machine-level facts repeated on every row (denormalized: a single battery's
+# file must be readable without joining to anything else).
+battery_raw_row() {
+  local epoch=$1 trigger=$2 status=$3 energy_now=$4 energy_full=$5 \
+    energy_full_design=$6 voltage_now=$7 power_now=$8 capacity=$9 \
+    cycle_count=${10} end_threshold=${11} ac_online=${12} boot_id=${13} \
+    suspend_count=${14} uptime_s=${15}
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$epoch" "$trigger" "$BATTERY_RECORDING_RULES_VERSION" "$status" \
+    "$energy_now" "$energy_full" "$energy_full_design" "$voltage_now" \
+    "$power_now" "$capacity" "$cycle_count" "$end_threshold" \
+    "$ac_online" "$boot_id" "$suspend_count" "$uptime_s"
+}
+
+battery_raw_valid() {
+  local first_line
+  [[ -f "$1" ]] || return 1
+  IFS= read -r first_line <"$1" 2>/dev/null || return 1
+  [[ $first_line == "$BATTERY_RAW_HEADER" ]]
+}
+
+# Sanitize a battery key for use as a directory name: replace only what the
+# filesystem actually forbids (/, NUL). No other transformation — this is a
+# continuation of identity-anchoring, not a new privacy boundary.
+battery_raw_dir_name() {
+  local key=$1
+  key=${key//\//-}
+  key=${key//$'\0'/-}
+  printf '%s' "$key"
+}
+
+# Machine-level facts stamped on every raw row. Every read is $(<file); no
+# fork. boot_id changes only across a reboot; suspend_count only increments
+# across a successful suspend/resume, so consecutive raw rows can tell a
+# reboot apart from a suspend apart from neither (see battery_extract_windows).
+battery_raw_boot_id() {
+  local id=""
+  [[ -f /proc/sys/kernel/random/boot_id ]] && id=$(</proc/sys/kernel/random/boot_id)
+  printf '%s' "${id:-unknown}"
+}
+
+battery_raw_suspend_count() {
+  local count=""
+  [[ -f /sys/power/suspend_stats/success ]] && count=$(</sys/power/suspend_stats/success)
+  [[ $count =~ ^[0-9]+$ ]] && printf '%s' "$count" || printf '0'
+}
+
+battery_raw_uptime_seconds() {
+  local uptime=""
+  [[ -f /proc/uptime ]] && uptime=$(</proc/uptime)
+  uptime=${uptime%% *}
+  uptime=${uptime%%.*}
+  [[ $uptime =~ ^[0-9]+$ ]] && printf '%s' "$uptime" || printf '0'
+}
+
 
 # The tracker state file's schema. v1 files carry no version key and also carry
 # derived model fields (battery_energy_now_uwh, usual_*) that v2 dropped: the
 # view recomputes those from live sysfs and the history, so there is no longer
 # a second, staler copy of them on disk.
+# The tracker's session-bookkeeping state file (previous_state, state_since,
+# charge_start_levels, ...). Unrelated to the raw/windows/gaps/state-tier
+# format versions above: this file was never derivable from raw and remains
+# the one thing that is not a cache.
 readonly BATTERY_STATE_SCHEMA_VERSION=2
 
 # --- Loaded history --------------------------------------------------------
@@ -252,6 +338,138 @@ battery_model_select_battery() {
     battery_model_recent_draws+=("${battery_model_draws[index]}")
   done
   battery_model_sort_numbers battery_model_draws
+}
+
+# --- Loading windows.tsv / gaps.tsv / battery-state.tsv (ADR-0001) ---------
+#
+# Reads the current-generation files the raw extractor produces. Populates the
+# same battery_model_key_* globals battery_model_load_history() does, so
+# battery_model_select_battery() and everything built on it works unchanged
+# regardless of which generation fed it.
+
+battery_model_windows_total_rows=0
+battery_model_windows_future_rows=0
+battery_model_windows_ineligible_rows=0
+
+battery_model_load_windows() {
+  local windows_file=$1 now=$2
+  local kind epoch key draw session
+
+  battery_model_state="missing"
+  battery_model_total_rows=0
+  battery_model_future_rows=0
+  battery_model_legacy_rows=0
+  battery_model_windows_total_rows=0
+  battery_model_windows_future_rows=0
+  battery_model_windows_ineligible_rows=0
+  battery_model_keys=()
+  battery_model_key_draws=()
+  battery_model_key_sessions=()
+  battery_model_key_last=()
+  battery_model_select_battery ""
+
+  [[ -f "$windows_file" ]] || return 0
+  local first_line
+  IFS= read -r first_line <"$windows_file" 2>/dev/null || return 0
+  if [[ "$first_line" != "$BATTERY_WINDOWS_HEADER" ]]; then
+    battery_model_state="unsupported"
+    return 0
+  fi
+  battery_model_state="ready"
+
+  while IFS=$'\t' read -r kind epoch key draw session; do
+    case $kind in
+    D)
+      if [[ -z ${battery_model_key_draws[$key]+x} ]]; then
+        battery_model_keys+=("$key")
+        battery_model_key_draws["$key"]=""
+        battery_model_key_sessions["$key"]=""
+      fi
+      battery_model_key_draws["$key"]+="$draw "
+      battery_model_key_sessions["$key"]+="$session "
+      battery_model_key_last["$key"]=$epoch
+      ;;
+    S)
+      battery_model_windows_total_rows=$epoch
+      battery_model_windows_future_rows=$key
+      battery_model_windows_ineligible_rows=$draw
+      ;;
+    esac
+  done < <(
+    awk -F '\t' -v now="$now" -v lookback="$BATTERY_MODEL_LOOKBACK_SECONDS" '
+      BEGIN { cutoff = now - lookback; total = future = ineligible = 0 }
+      /^#/ { next }
+      $1 !~ /^[0-9]+$/ { next }
+      {
+        total++
+        if ($1 > now) { future++; next }
+        if ($1 < cutoff) next
+        if ($12 != 1) { ineligible++; next }
+        printf "D\t%s\t%s\t%s\t%s\n", $1, $3, $4, $2
+      }
+      END { printf "S\t%d\t%d\t%d\n", total, future, ineligible }
+    ' "$windows_file"
+  )
+}
+
+# Batteries this machine has evidence for in windows.tsv that are not in the
+# CURRENT_KEYS list passed in. Prints one key per line.
+battery_model_absent_keys() {
+  local -n _bm_current=$1
+  local key present k
+  for key in "${battery_model_keys[@]}"; do
+    present=0
+    for k in "${_bm_current[@]}"; do
+      [[ "$k" == "$key" ]] && present=1 && break
+    done
+    ((present == 1)) || printf '%s\n' "$key"
+  done
+}
+
+# Gaps recorded for one battery, most recent first, as
+# start_epoch\tend_epoch\tcause\tenergy_delta_uwh lines.
+battery_model_gaps_for() {
+  local gaps_file=$1 key=$2
+  [[ -f "$gaps_file" ]] || return 0
+  awk -F '\t' -v k="$key" '!/^#/ && $1==k { print $2"\t"$3"\t"$4"\t"$9 }' "$gaps_file" |
+    sort -t $'\t' -k1,1 -rn
+}
+
+# Tier 3: load one battery's open-window state and selected estimator.
+# Sets: battery_model_tier3_open_epoch/_energy, _estimator, _scored, _error,
+# _updated. All zero/default when the battery has no tier-3 row yet.
+battery_model_tier3_open_epoch=0
+battery_model_tier3_open_energy=0
+battery_model_tier3_estimator="$BATTERY_MODEL_DEFAULT_ESTIMATOR"
+battery_model_tier3_scored=0
+battery_model_tier3_error=0
+battery_model_tier3_updated=0
+
+battery_model_load_tier3() {
+  local state_file=$1 key=$2
+  local first_line line row_key open_epoch open_energy estimator scored error updated
+
+  battery_model_tier3_open_epoch=0
+  battery_model_tier3_open_energy=0
+  battery_model_tier3_estimator="$BATTERY_MODEL_DEFAULT_ESTIMATOR"
+  battery_model_tier3_scored=0
+  battery_model_tier3_error=0
+  battery_model_tier3_updated=0
+
+  [[ -f "$state_file" ]] || return 0
+  IFS= read -r first_line <"$state_file" 2>/dev/null || return 0
+  [[ "$first_line" == "$BATTERY_STATE_TIER_HEADER" ]] || return 0
+
+  while IFS=$'\t' read -r row_key open_epoch open_energy estimator scored error updated; do
+    [[ "$row_key" == "$key" ]] || continue
+    battery_model_tier3_open_epoch=${open_epoch:-0}
+    battery_model_tier3_open_energy=${open_energy:-0}
+    battery_model_tier3_estimator=${estimator:-$BATTERY_MODEL_DEFAULT_ESTIMATOR}
+    battery_model_tier3_scored=${scored:-0}
+    battery_model_tier3_error=${error:-0}
+    battery_model_tier3_updated=${updated:-0}
+    return 0
+  done < <(tail -n +2 -- "$state_file")
 }
 
 # --- Statistics ------------------------------------------------------------
@@ -540,6 +758,108 @@ battery_model_window_draw_mw() {
 battery_model_window_complete() {
   local elapsed_seconds=$1
   ((elapsed_seconds >= BATTERY_MODEL_WINDOW_SECONDS))
+}
+
+# --- Extraction (ADR-0001): raw -> windows + gaps + battery-state ---------
+#
+# The one place raw observations become windows. Called two ways: once per
+# poll, over a bounded tail of each battery's raw file (cheap, incremental);
+# and by `make reextract`, over the complete file (expensive, exhaustive).
+# Both call this function. A second implementation is exactly the failure
+# this ADR exists to remove — the threshold rule and the capacity-fingerprint
+# bug each shipped because a second copy quietly disagreed with the first.
+#
+# Reads raw rows (oldest first, tab-separated, battery_raw_row's column
+# order) on stdin for ONE battery's file. Writes windows.tsv rows to stdout.
+# Writes gaps.tsv rows to GAPS_FILE if given (appended, caller truncates
+# first if a full rewrite is wanted). Does not read or open the raw file
+# itself — callers own I/O so the same function serves a tail (incremental)
+# or a whole file (batch, make reextract) identically.
+#
+# A window is written even when interrupted; the trailing `eligible` column
+# is 0 for one that spans a gap, 1 otherwise. Nothing is discarded — a
+# battery's evidence is never smaller than what battery_extract_windows()
+# has ever seen, only some of it is marked unusable for modelling.
+battery_extract_windows() {
+  local battery_key=$1 gaps_file=${2-/dev/null} open_file=${3-/dev/null}
+  awk -F '\t' -v key="$battery_key" -v gaps_file="$gaps_file" -v open_file="$open_file" \
+    -v window_seconds="$BATTERY_MODEL_WINDOW_SECONDS" \
+    -v max_gap="$BATTERY_MODEL_MAX_POLL_GAP_SECONDS" \
+    -v min_draw="$BATTERY_MODEL_MIN_DRAW_MW" -v max_draw="$BATTERY_MODEL_MAX_DRAW_MW" '
+    function abs(x) { return x < 0 ? -x : x }
+    function classify_gap(prev_boot, boot, prev_susp, susp) {
+      if (boot != prev_boot) return "off"
+      if (susp + 0 > prev_susp + 0) return "asleep"
+      return "blind"
+    }
+    BEGIN { have_start = 0; eligible = 1; have_prev = 0; session_epoch = 0 }
+    NF < 16 { next }
+    {
+      epoch=$1+0; status=$4; energy_now=$5+0
+      ac_online=$13; boot_id=$14; suspend_count=$15+0
+
+      if (have_prev) {
+        gap = epoch - prev_epoch
+        # Clock-jitter tolerance: routine NTP slew is well under this: a
+        # genuine backward step, or a forward gap past the poll tolerance,
+        # breaks continuity.
+        if (gap < -5 || gap > max_gap) {
+          cause = (gap < -5) ? "clock" : classify_gap(prev_boot, boot_id, prev_suspend, suspend_count)
+          printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+            key, prev_epoch, epoch, cause, prev_ac, ac_online, \
+            prev_energy_now, energy_now, abs(energy_now - prev_energy_now) \
+            >> gaps_file
+          eligible = 0
+          # Reset before this rows own discharge processing runs below, so a
+          # resumed-discharging row always starts a clean window rather than
+          # computing elapsed across the gap itself.
+          have_start = 0
+        }
+      }
+
+      if (energy_now > 0 && status == "Discharging") {
+        if (!have_start) {
+          # A continuous discharge run is one session even when it spans
+          # several completed windows; the session id is the runs own
+          # start epoch, not each individual windows. A fresh session is
+          # never itself ineligible, whatever the row before it was doing.
+          start_epoch = epoch; start_energy = energy_now; have_start = 1
+          session_epoch = epoch; eligible = 1
+        } else if (energy_now > start_energy) {
+          # Energy rose: not a discharge window, but still the same run.
+          start_epoch = epoch; start_energy = energy_now; eligible = 1
+        } else {
+          elapsed = epoch - start_epoch
+          if (elapsed >= window_seconds) {
+            used = start_energy - energy_now
+            if (used > 0) {
+              draw = int((used * 3600 + elapsed * 500) / (elapsed * 1000))
+              if (draw >= min_draw && draw <= max_draw) {
+                printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+                  epoch, session_epoch, key, draw, energy_now, $6, $7, $8, $9, $10, $11, eligible
+              }
+            }
+            start_epoch = epoch; start_energy = energy_now; eligible = 1
+          }
+        }
+      } else {
+        have_start = 0
+      }
+
+      prev_epoch = epoch; prev_ac = ac_online; prev_boot = boot_id
+      prev_suspend = suspend_count; prev_energy_now = energy_now
+      have_prev = 1
+    }
+    END {
+      # The still-open window, if any: what the view shows as "Current
+      # sample" without ever reading raw itself.
+      if (have_start) {
+        printf "%s\t%s\t%s\n", start_epoch, start_energy, prev_epoch > open_file
+      } else {
+        printf "0\t0\t0\n" > open_file
+      }
+    }
+  '
 }
 
 # --- Battery-set identity --------------------------------------------------
