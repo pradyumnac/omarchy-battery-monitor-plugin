@@ -40,7 +40,9 @@ BEGIN {
   FS = "\t"
 
   W = 1240; H = 620
-  ML = 78; MR = 34; MT = 104; PH = 300
+  # Keep the document size stable, but give the chart content more breathing
+  # room at the edges.
+  ML = 92; MR = 48; MT = 116; PH = 288
   PW = W - ML - MR
 
   y_axis      = MT + PH
